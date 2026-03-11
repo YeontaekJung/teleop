@@ -1,0 +1,5 @@
+*/build/*
+*/install/*
+*/log/*
+/ROS_BAG/*
+*.zip
