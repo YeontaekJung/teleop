@@ -2,4 +2,4 @@
 */install/*
 */log/*
 /ROS_BAG/*
-*.zip
+#*.zip
