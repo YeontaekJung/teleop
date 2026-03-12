@@ -3,3 +3,11 @@
 */log/*
 /ROS_BAG/*
 #*.zip
+
+# ManusSDK - proprietary binary, place manually at repo root
+/ManusSDK/
+
+# ROS2 colcon artifacts
+/build/
+/install/
+/log/
