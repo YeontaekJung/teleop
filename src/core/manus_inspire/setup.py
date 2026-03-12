@@ -1,6 +1,6 @@
 from setuptools import setup
 
-package_name = 'manus_to_inspire'
+package_name = 'manus_inspire'
 
 setup(
     name=package_name,
@@ -14,7 +14,7 @@ setup(
     zip_safe=True,
     entry_points={
         'console_scripts': [
-            'manus_to_inspire_node = manus_to_inspire.manus_refiner:main',
+            'manus_inspire_node = manus_inspire.manus_refiner:main',
         ],
     },
 )
