@@ -1,0 +1,17 @@
+int16[9]   fingerone_tip_touch
+int16[96]  fingerone_top_touch
+int16[80]  fingerone_palm_touch
+int16[9]   fingertwo_tip_touch
+int16[96]  fingertwo_top_touch
+int16[80]  fingertwo_palm_touch
+int16[9]   fingerthree_tip_touch
+int16[96]  fingerthree_top_touch
+int16[80]  fingerthree_palm_touch
+int16[9]   fingerfour_tip_touch
+int16[96]  fingerfour_top_touch
+int16[80]  fingerfour_palm_touch
+int16[9]   fingerfive_tip_touch
+int16[96]  fingerfive_top_touch
+int16[9]   fingerfive_middle_touch
+int16[80]  fingerfive_palm_touch
+int16[112] palm_touch
