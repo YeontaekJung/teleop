@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>vive_rby1</name>
+  <version>0.1.0</version>
+  <description>
+    Vive tracker → RB-Y1 teleoperation bridge.
+    Subscribes to tracker poses + pedal, computes delta EE targets,
+    solves IK, and publishes JointGroupCommand.
+  </description>
+  <maintainer email="todo@todo.com">todo</maintainer>
+  <license>MIT</license>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>rby1_ik</exec_depend>
+
+  <!-- rby1_sdk_msgs: JointGroupCommand - install separately from rby1 SDK -->
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

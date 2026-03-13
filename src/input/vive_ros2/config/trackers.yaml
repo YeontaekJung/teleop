@@ -1,0 +1,14 @@
+vive_tracker_node:
+  ros__parameters:
+    # Serial numbers - update these to match your hardware
+    serial_station_left:  "LHB-E369DC69"
+    serial_station_right: "LHB-ACA3FF29"
+    serial_tracker_left:  "LHR-83AA739B"
+    serial_tracker_right: "LHR-22E4DDD6"
+
+    # Publish rate (Hz)
+    publish_rate: 100.0
+
+    # Topics
+    topic_tracker_left:  "/teleop/tracker/left"
+    topic_tracker_right: "/teleop/tracker/right"
