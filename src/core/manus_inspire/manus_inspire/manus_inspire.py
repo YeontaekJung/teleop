@@ -6,10 +6,10 @@ from inspire_hand_msgs.msg import InspireHandCtrl
 MAX_INSPIRE = 1000
 
 
-class ManusToInspire(Node):
+class ManusInspire(Node):
 
     def __init__(self):
-        super().__init__("manus_to_inspire")
+        super().__init__("manus_inspire")
 
         self.sub_l = self.create_subscription(
             ManusGlove, "/manus_glove_0", self.cb_left, 10)
@@ -128,7 +128,7 @@ class ManusToInspire(Node):
 
 def main():
     rclpy.init()
-    node = ManusToInspire()
+    node = ManusInspire()
     rclpy.spin(node)
     node.destroy_node()
     rclpy.shutdown()

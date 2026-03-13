@@ -14,7 +14,7 @@ setup(
     zip_safe=True,
     entry_points={
         'console_scripts': [
-            'manus_inspire_node = manus_inspire.manus_refiner:main',
+            'manus_inspire_node = manus_inspire.manus_inspire:main',
         ],
     },
 )
