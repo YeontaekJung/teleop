@@ -1,0 +1,8 @@
+# Manus Glove Device IDs
+# These are hardware IDs printed on the glove dongles.
+# Used for identification when multiple gloves are connected.
+
+manus_data_publisher:
+  ros__parameters:
+    glove_id_left:  "101FD009"
+    glove_id_right: "8C1794FD"
