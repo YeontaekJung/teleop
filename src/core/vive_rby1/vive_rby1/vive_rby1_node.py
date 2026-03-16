@@ -172,7 +172,8 @@ class ViveRby1Node(Node):
 
         # Capture current EE pose via pinocchio FK
         q_pin = self._ik.configuration.q
-        pin.framesForwardKinematics(self._ik.robot.model, self._ik.robot.data, q_pin)
+        pin.forwardKinematics(self._ik.robot.model, self._ik.robot.data, q_pin)
+        pin.updateFramePlacements(self._ik.robot.model, self._ik.robot.data)
         fid_l = self._ik.robot.model.getFrameId('tracker_left')
         fid_r = self._ik.robot.model.getFrameId('tracker_right')
         self._ee_l_0 = self._ik.robot.data.oMf[fid_l].copy()
