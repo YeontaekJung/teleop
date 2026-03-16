@@ -6,7 +6,7 @@ Subscriptions:
   /teleop/tracker/left    geometry_msgs/PoseStamped  (from vive_ros2)
   /teleop/tracker/right   geometry_msgs/PoseStamped  (from vive_ros2)
   /teleop/pedal           sensor_msgs/Joy            (from pedal driver)
-  /joint_states           sensor_msgs/JointState     (from rby1 SDK)
+  /rby1_status_joint      sensor_msgs/JointState     (from rby1 SDK)
 
 Publication:
   /rby1_teleop_command    rby1_sdk_msgs/JointGroupCommand
@@ -134,11 +134,9 @@ class ViveRby1Node(Node):
 
     def _cb_tracker_l(self, msg: PoseStamped):
         self._tracker_l = msg
-        self._try_auto_engage()
 
     def _cb_tracker_r(self, msg: PoseStamped):
         self._tracker_r = msg
-        self._try_auto_engage()
 
     def _cb_joint_state(self, msg: JointState):
         self._joint_state = msg
