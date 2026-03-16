@@ -4,4 +4,4 @@ int16[6]  force_act
 int16[6]  current
 uint8[6]  err
 uint8[6]  status
-unit8[6]  temperature
+uint8[6]  temperature
