@@ -10,6 +10,11 @@ Coordinate frame conversion: OpenVR → ROS
   OpenVR: right-handed, Y-up
   ROS:    right-handed, Z-up
   Mapping: ros.x = -vr.z,  ros.y = -vr.x,  ros.z = vr.y
+
+Station alignment (optional):
+  If both base stations are detected, computes a Z-rotation to align
+  the tracking universe with the robot frame. If stations are not
+  configured or not found, alignment is skipped (identity rotation).
 """
 
 import numpy as np
@@ -38,16 +43,8 @@ def openvr_col_to_ros(col: np.ndarray) -> np.ndarray:
     return np.array([-z, -x, y])
 
 
-def openvr_mat34_to_ros(mat34) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Convert OpenVR 3x4 matrix to (ros_pos, ros_rot_matrix).
-    """
-    T = np.array([
-        [mat34[0][0], mat34[0][1], mat34[0][2], mat34[0][3]],
-        [mat34[1][0], mat34[1][1], mat34[1][2], mat34[1][3]],
-        [mat34[2][0], mat34[2][1], mat34[2][2], mat34[2][3]],
-        [0, 0, 0, 1],
-    ])
+def openvr_mat34_to_ros(T: np.ndarray) -> tuple:
+    """Convert OpenVR 4x4 matrix to (ros_pos, ros_rot_matrix)."""
     pos_ros = openvr_to_ros_pos(T[:3, 3])
     rot_ros = np.stack([
         openvr_col_to_ros(T[:3, 0]),
@@ -83,14 +80,12 @@ def get_rotation_to_align_stations(p1_ros: np.ndarray, p2_ros: np.ndarray) -> np
 
 class ViveTrackerNode(Node):
 
-    DEVICE_NAMES = ['station_left', 'station_right', 'tracker_left', 'tracker_right']
-
     def __init__(self):
         super().__init__('vive_tracker_node')
 
         # Declare & read parameters
-        self.declare_parameter('serial_station_left',  'LHB-E369DC69')
-        self.declare_parameter('serial_station_right', 'LHB-ACA3FF29')
+        self.declare_parameter('serial_station_left',  '')
+        self.declare_parameter('serial_station_right', '')
         self.declare_parameter('serial_tracker_left',  'LHR-83AA739B')
         self.declare_parameter('serial_tracker_right', 'LHR-22E4DDD6')
         self.declare_parameter('publish_rate',         100.0)
@@ -98,14 +93,18 @@ class ViveTrackerNode(Node):
         self.declare_parameter('topic_tracker_right',  '/teleop/tracker/right')
 
         serials = {
-            'station_left':  self.get_parameter('serial_station_left').value,
-            'station_right': self.get_parameter('serial_station_right').value,
             'tracker_left':  self.get_parameter('serial_tracker_left').value,
             'tracker_right': self.get_parameter('serial_tracker_right').value,
         }
-        # reverse map: serial → name
-        self._serial_to_name = {v: k for k, v in serials.items()}
-        self._name_to_idx = {n: i for i, n in enumerate(self.DEVICE_NAMES)}
+        sl = self.get_parameter('serial_station_left').value
+        sr = self.get_parameter('serial_station_right').value
+        if sl:
+            serials['station_left'] = sl
+        if sr:
+            serials['station_right'] = sr
+
+        # reverse map: serial → device name
+        self._serial_to_name = {v: k for k, v in serials.items() if v}
 
         rate_hz = self.get_parameter('publish_rate').value
         topic_l = self.get_parameter('topic_tracker_left').value
@@ -115,13 +114,12 @@ class ViveTrackerNode(Node):
         self._pub_left  = self.create_publisher(PoseStamped, topic_l, 10)
         self._pub_right = self.create_publisher(PoseStamped, topic_r, 10)
 
-        # Device state: pose (4x4) for each of 4 devices
-        self._T = [None] * 4
-        self._alive = [False] * 4
-        self._alive_prev = [False] * 4
+        # Device poses: name → 4x4 numpy array
+        self._poses: dict = {}
+        self._prev_alive: set = set()
 
-        # Station alignment rotation (3x3, applied to tracker positions/orientations)
-        self._station_rot: np.ndarray | None = None
+        # Station alignment rotation (3x3)
+        self._station_rot: np.ndarray = np.eye(3)
         self._initialized = False
 
         # OpenVR init
@@ -129,57 +127,50 @@ class ViveTrackerNode(Node):
         self.get_logger().info('OpenVR initialized')
 
         # Timer
-        period = 1.0 / rate_hz
-        self._timer = self.create_timer(period, self._timer_cb)
+        self._timer = self.create_timer(1.0 / rate_hz, self._timer_cb)
 
     # ------------------------------------------------------------------
 
     def _poll_devices(self) -> bool:
         """Read all device poses from SteamVR. Returns True if both trackers alive."""
-        poses = self._vr.getDeviceToAbsoluteTrackingPose(
+        self._poses.clear()
+
+        raw_poses = self._vr.getDeviceToAbsoluteTrackingPose(
             openvr.TrackingUniverseStanding, 0, openvr.k_unMaxTrackedDeviceCount
         )
 
-        for i in range(4):
-            self._alive[i] = False
-
-        for i, pose in enumerate(poses):
+        for i, pose in enumerate(raw_poses):
             if not pose.bPoseIsValid:
                 continue
             serial = get_serial(self._vr, i)
             if serial not in self._serial_to_name:
                 continue
             name = self._serial_to_name[serial]
-            idx = self._name_to_idx[name]
             m = pose.mDeviceToAbsoluteTracking
-            self._T[idx] = np.array([
+            self._poses[name] = np.array([
                 [m[0][0], m[0][1], m[0][2], m[0][3]],
                 [m[1][0], m[1][1], m[1][2], m[1][3]],
                 [m[2][0], m[2][1], m[2][2], m[2][3]],
                 [0, 0, 0, 1],
             ])
-            self._alive[idx] = True
 
         # Log connect/disconnect events
-        for i, name in enumerate(self.DEVICE_NAMES):
-            if self._alive[i] != self._alive_prev[i]:
-                if self._alive[i]:
-                    self.get_logger().info(f'Device connected:    {name}')
-                else:
-                    self.get_logger().warn(f'Device disconnected: {name}')
-            self._alive_prev[i] = self._alive[i]
+        alive_now = set(self._poses.keys())
+        for name in alive_now - self._prev_alive:
+            self.get_logger().info(f'Device connected:    {name}')
+        for name in self._prev_alive - alive_now:
+            self.get_logger().warn(f'Device disconnected: {name}')
+        self._prev_alive = alive_now
 
-        # Both stations (idx 0,1) and both trackers (idx 2,3) must be alive
-        return all(self._alive)
+        return 'tracker_left' in self._poses and 'tracker_right' in self._poses
 
-    def _make_pose_stamped(self, device_idx: int) -> PoseStamped:
-        T = self._T[device_idx]
+    def _make_pose_stamped(self, device_name: str) -> PoseStamped:
+        T = self._poses[device_name]
         pos_ros, rot_ros = openvr_mat34_to_ros(T)
 
         # Apply station alignment rotation
-        if self._station_rot is not None:
-            pos_ros = self._station_rot @ pos_ros
-            rot_ros = self._station_rot @ rot_ros
+        pos_ros = self._station_rot @ pos_ros
+        rot_ros = self._station_rot @ rot_ros
 
         quat = rot_matrix_to_quat_xyzw(rot_ros)
 
@@ -200,17 +191,20 @@ class ViveTrackerNode(Node):
             self._initialized = False
             return
 
-        # One-time station alignment
+        # One-time initialization
         if not self._initialized:
-            p1 = openvr_to_ros_pos(self._T[0][:3, 3])  # station_left
-            p2 = openvr_to_ros_pos(self._T[1][:3, 3])  # station_right
-            self._station_rot = get_rotation_to_align_stations(p1, p2)
-            self.get_logger().info('Station alignment computed.')
+            if 'station_left' in self._poses and 'station_right' in self._poses:
+                p1 = openvr_to_ros_pos(self._poses['station_left'][:3, 3])
+                p2 = openvr_to_ros_pos(self._poses['station_right'][:3, 3])
+                self._station_rot = get_rotation_to_align_stations(p1, p2)
+                self.get_logger().info('Station alignment computed.')
+            else:
+                self._station_rot = np.eye(3)
+                self.get_logger().info('No stations found — skipping alignment.')
             self._initialized = True
 
-        # Publish tracker poses (idx 2=left, 3=right)
-        self._pub_left.publish(self._make_pose_stamped(2))
-        self._pub_right.publish(self._make_pose_stamped(3))
+        self._pub_left.publish(self._make_pose_stamped('tracker_left'))
+        self._pub_right.publish(self._make_pose_stamped('tracker_right'))
 
     def destroy_node(self):
         openvr.shutdown()
