@@ -30,9 +30,7 @@ import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import PoseStamped
 from sensor_msgs.msg import Joy, JointState
-
 from interbotix_xs_msgs.msg import JointGroupCommand
-
 from rby1_ik.rby1_ik import Rby1Ik
 
 
@@ -172,9 +170,13 @@ class ViveRby1Node(Node):
         self._ref_l = pose_stamped_to_SE3(self._tracker_l)
         self._ref_r = pose_stamped_to_SE3(self._tracker_r)
 
-        # Capture current EE pose from FK using latest IK configuration
-        self._ee_l_0 = self._ik.configuration.get_transform_frame_to_world('tracker_left')
-        self._ee_r_0 = self._ik.configuration.get_transform_frame_to_world('tracker_right')
+        # Capture current EE pose via pinocchio FK
+        q_pin = self._ik.configuration.q
+        pin.framesForwardKinematics(self._ik.robot.model, self._ik.robot.data, q_pin)
+        fid_l = self._ik.robot.model.getFrameId('tracker_left')
+        fid_r = self._ik.robot.model.getFrameId('tracker_right')
+        self._ee_l_0 = self._ik.robot.data.oMf[fid_l].copy()
+        self._ee_r_0 = self._ik.robot.data.oMf[fid_r].copy()
 
         self._engaged = True
         self.get_logger().info('Clutch ENGAGED — teleoperation active')
