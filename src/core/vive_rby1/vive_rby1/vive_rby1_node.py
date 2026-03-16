@@ -31,11 +31,7 @@ from rclpy.node import Node
 from geometry_msgs.msg import PoseStamped
 from sensor_msgs.msg import Joy, JointState
 
-try:
-    from rby1_sdk_msgs.msg import JointGroupCommand
-    HAS_RBY1_SDK = True
-except ImportError:
-    HAS_RBY1_SDK = False
+from interbotix_xs_msgs.msg import JointGroupCommand
 
 from rby1_ik.rby1_ik import Rby1Ik
 
@@ -127,11 +123,7 @@ class ViveRby1Node(Node):
         self.create_subscription(JointState,  topic_js, self._cb_joint_state, 10)
 
         # Publisher
-        if HAS_RBY1_SDK:
-            self._pub_cmd = self.create_publisher(JointGroupCommand, topic_cmd, 10)
-        else:
-            self.get_logger().warn('rby1_sdk_msgs not found — command publishing disabled')
-            self._pub_cmd = None
+        self._pub_cmd = self.create_publisher(JointGroupCommand, topic_cmd, 10)
 
         # Timer
         self._timer = self.create_timer(1.0 / rate_hz, self._timer_cb)
@@ -142,9 +134,11 @@ class ViveRby1Node(Node):
 
     def _cb_tracker_l(self, msg: PoseStamped):
         self._tracker_l = msg
+        self._try_auto_engage()
 
     def _cb_tracker_r(self, msg: PoseStamped):
         self._tracker_r = msg
+        self._try_auto_engage()
 
     def _cb_joint_state(self, msg: JointState):
         self._joint_state = msg
@@ -196,11 +190,10 @@ class ViveRby1Node(Node):
     # ------------------------------------------------------------------
 
     def _timer_cb(self):
-        if not self._engaged:
-            return
         if self._tracker_l is None or self._tracker_r is None:
             return
-        if self._ref_l is None or self._ref_r is None:
+        if not self._engaged:
+            self._on_engage()
             return
 
         tracker_l_now = pose_stamped_to_SE3(self._tracker_l)
@@ -229,20 +222,9 @@ class ViveRby1Node(Node):
         self._publish_command(q20)
 
     def _publish_command(self, q20: np.ndarray):
-        if self._pub_cmd is None:
-            return
-
-        # Build JointGroupCommand for rby1 SDK
-        # Joint order: torso(6) + right_arm(7) + left_arm(7) = 20
         cmd = JointGroupCommand()
-        cmd.name = [
-            "torso_0", "torso_1", "torso_2", "torso_3", "torso_4", "torso_5",
-            "right_arm_0", "right_arm_1", "right_arm_2", "right_arm_3",
-            "right_arm_4", "right_arm_5", "right_arm_6",
-            "left_arm_0",  "left_arm_1",  "left_arm_2",  "left_arm_3",
-            "left_arm_4",  "left_arm_5",  "left_arm_6",
-        ]
-        cmd.position = q20.tolist()
+        cmd.name = 'All'
+        cmd.cmd = np.concatenate((q20, np.array([0., 0.]))).tolist()
         self._pub_cmd.publish(cmd)
 
 
