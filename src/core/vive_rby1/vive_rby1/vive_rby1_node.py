@@ -76,7 +76,7 @@ class ViveRby1Node(Node):
         self.declare_parameter('topic_pedal',          '/teleop/pedal')
         self.declare_parameter('topic_joint_state',    '/joint_states')
         self.declare_parameter('topic_teleop_command', '/rby1_teleop_command')
-        self.declare_parameter('pos_scale',      1.0)
+        self.declare_parameter('pos_scale',      2.0)
         self.declare_parameter('ik_dt',          0.05)
         self.declare_parameter('publish_rate',   20.0)
         self.declare_parameter('pedal_button_index', 0)
