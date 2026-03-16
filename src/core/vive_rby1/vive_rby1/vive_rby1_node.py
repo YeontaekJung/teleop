@@ -94,6 +94,12 @@ class ViveRby1Node(Node):
         self._pedal_idx   = self.get_parameter('pedal_button_index').value
         rate_hz           = self.get_parameter('publish_rate').value
 
+        # Coordinate transform: tracker (ROS frame) → robot EE frame
+        # Same as v2r_R in small_main.py reference code
+        self._v2r_R = np.array([[0., -1.,  0.],
+                                [-1.,  0.,  0.],
+                                [ 0.,  0., -1.]])
+
         # IK solver
         if not urdf_path or not srdf_path:
             self.get_logger().error('urdf_path / srdf_path not set! Check config yaml.')
@@ -202,9 +208,9 @@ class ViveRby1Node(Node):
         delta_l = tracker_l_now.translation - self._ref_l.translation
         delta_r = tracker_r_now.translation - self._ref_r.translation
 
-        # Target EE positions = pose at engage + scaled delta
-        target_pos_l = self._ee_l_0.translation + self._pos_scale * delta_l
-        target_pos_r = self._ee_r_0.translation + self._pos_scale * delta_r
+        # Target EE positions = pose at engage + scaled delta (with coord transform)
+        target_pos_l = self._ee_l_0.translation + self._pos_scale * (self._v2r_R @ delta_l)
+        target_pos_r = self._ee_r_0.translation + self._pos_scale * (self._v2r_R @ delta_r)
 
         # Target EE orientations: rotate reference EE by tracker rotation delta
         dR_l = tracker_l_now.rotation @ self._ref_l.rotation.T
