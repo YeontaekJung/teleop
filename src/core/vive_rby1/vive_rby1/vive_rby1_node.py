@@ -171,13 +171,15 @@ class ViveRby1Node(Node):
         self._ref_r = pose_stamped_to_SE3(self._tracker_r)
 
         # Capture current EE pose via pinocchio FK
+        model = self._ik.robot.model
+        data = model.createData()
         q_pin = self._ik.configuration.q
-        pin.forwardKinematics(self._ik.robot.model, self._ik.robot.data, q_pin)
-        pin.updateFramePlacements(self._ik.robot.model, self._ik.robot.data)
-        fid_l = self._ik.robot.model.getFrameId('tracker_left')
-        fid_r = self._ik.robot.model.getFrameId('tracker_right')
-        self._ee_l_0 = self._ik.robot.data.oMf[fid_l].copy()
-        self._ee_r_0 = self._ik.robot.data.oMf[fid_r].copy()
+        pin.forwardKinematics(model, data, q_pin)
+        pin.updateFramePlacements(model, data)
+        fid_l = model.getFrameId('tracker_left')
+        fid_r = model.getFrameId('tracker_right')
+        self._ee_l_0 = data.oMf[fid_l].copy()
+        self._ee_r_0 = data.oMf[fid_r].copy()
 
         self._engaged = True
         self.get_logger().info('Clutch ENGAGED — teleoperation active')
