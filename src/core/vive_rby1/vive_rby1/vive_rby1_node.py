@@ -192,7 +192,7 @@ class ViveRby1Node(Node):
     def _timer_cb(self):
         if self._tracker_l is None or self._tracker_r is None:
             return
-        if not self._engaged:
+        if not self._engaged or self._ref_l is None or self._ee_l_0 is None:
             self._on_engage()
             return
 
