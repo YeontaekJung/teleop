@@ -101,25 +101,25 @@ class ManusInspire(Node):
         )
 
         # ---- Inspire 변환 ----
-        index  = self.flex_to_inspire(index_flex, 95.0, invert=True)
-        middle = self.flex_to_inspire(middle_flex, 95.0, invert=True)
-        ring   = self.flex_to_inspire(ring_flex, 95.0, invert=True)
-        pinky  = self.flex_to_inspire(pinky_flex, 95.0, invert=True)
+        index  = self.flex_to_inspire(index_flex,  75.0, invert=True)
+        middle = self.flex_to_inspire(middle_flex, 75.0, invert=True)
+        ring   = self.flex_to_inspire(ring_flex,   75.0, invert=True)
+        pinky  = self.flex_to_inspire(pinky_flex,  65.0, invert=True)  # 새끼손가락 더 민감하게
 
         # Thumb Inversion
         thumb  = self.flex_to_inspire(thumb_flex, 35.0, invert=True)
 
         # ---- Spread ----
         spread_raw = ergo.get("ThumbMCPSpread", 0.0)
-        
-        spread_scaled = spread_raw * 1.5  
 
+        spread_scaled = spread_raw * 1.5
         spread_norm = (spread_scaled + 50.0) / 70.0
         spread_norm = self.clamp(spread_norm, 0.0, 1.0)
-
         spread_value = int(spread_norm * MAX_INSPIRE)
 
-        spread_value = MAX_INSPIRE - spread_value
+        # 왼손은 엄지 spread 방향이 반대
+        if not is_right:
+            spread_value = MAX_INSPIRE - spread_value
 
         return self.build_msg(
             pinky, ring, middle, index, thumb, spread_value
