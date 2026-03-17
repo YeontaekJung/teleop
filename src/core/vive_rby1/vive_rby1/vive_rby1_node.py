@@ -119,7 +119,7 @@ class ViveRby1Node(Node):
         self._joint_state: JointState | None = None
 
         # Pedal state
-        self._pedal_engage_active = False      # buttons[0]: current hold state
+        # self._pedal_engage_active = False    # buttons[0]: current hold state
         # self._pedal_record_prev  = False     # buttons[1]: previous state for edge detect
 
         # Clutch state
@@ -137,7 +137,15 @@ class ViveRby1Node(Node):
 
         # Publisher
         self._pub_cmd = self.create_publisher(JointGroupCommand, topic_cmd, 10)
-        # self._pub_record = self.create_publisher(Bool, '/teleop/record', 10)
+
+        # Recording service server (called from external recording core)
+        # Service: /vive_rby1/set_recording  std_srvs/SetBool
+        #   request.data = True  → start recording
+        #   request.data = False → stop recording
+        # self._recording_active = False
+        # self._srv_recording = self.create_service(
+        #     SetBool, '~/set_recording', self._srv_set_recording)
+        # -- import needed: from std_srvs.srv import SetBool
 
         # Timer
         self._timer = self.create_timer(1.0 / rate_hz, self._timer_cb)
@@ -162,15 +170,15 @@ class ViveRby1Node(Node):
                 list(self._joint_state.position),
             )
 
-    def _cb_pedal(self, msg: Joy):
+    def _cb_pedal(self, _msg: Joy):
         # ---- Pedal 0: dead-man switch (hold to engage) ----
-        if self._pedal_idx < len(msg.buttons):
-            active = bool(msg.buttons[self._pedal_idx])
-            if active and not self._pedal_engage_active:
-                self._on_engage()
-            elif not active and self._pedal_engage_active:
-                self._on_disengage()
-            self._pedal_engage_active = active
+        # if self._pedal_idx < len(msg.buttons):
+        #     active = bool(msg.buttons[self._pedal_idx])
+        #     if active and not self._pedal_engage_active:
+        #         self._on_engage()
+        #     elif not active and self._pedal_engage_active:
+        #         self._on_disengage()
+        #     self._pedal_engage_active = active
 
         # ---- Pedal 1: recording toggle (rising edge) ----
         # PEDAL_RECORD_IDX = 1
@@ -184,17 +192,21 @@ class ViveRby1Node(Node):
         # PEDAL_SPARE_IDX = 2
         # if PEDAL_SPARE_IDX < len(msg.buttons):
         #     pass  # map when needed
+        pass
 
     # ------------------------------------------------------------------
-    # Recording toggle (pedal 1 — not yet active)
+    # Recording service handler (not yet active)
+    # Service: /vive_rby1/set_recording  std_srvs/SetBool
+    #   True  → start recording
+    #   False → stop recording
     # ------------------------------------------------------------------
-    # def _toggle_recording(self):
-    #     """Publish a Bool edge on /teleop/record for rosbag control."""
-    #     from std_msgs.msg import Bool
-    #     msg = Bool()
-    #     msg.data = True   # listener handles toggle logic externally
-    #     self._pub_record.publish(msg)
-    #     self.get_logger().info('[vive_rby1] Recording toggle signal sent')
+    # def _srv_set_recording(self, req, resp):
+    #     self._recording_active = req.data
+    #     state = 'STARTED' if req.data else 'STOPPED'
+    #     self.get_logger().info(f'[vive_rby1] Recording {state}')
+    #     resp.success = True
+    #     resp.message = f'Recording {state.lower()}'
+    #     return resp
 
     # ------------------------------------------------------------------
     # Clutch engage / disengage
