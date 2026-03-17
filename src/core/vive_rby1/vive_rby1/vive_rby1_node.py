@@ -213,11 +213,15 @@ class ViveRby1Node(Node):
         target_pos_r = self._ee_r_0.translation + self._pos_scale * (self._v2r_R @ delta_r)
 
         # Target EE orientations: rotate reference EE by tracker rotation delta
+        # Convert delta rotation to robot frame via similarity transform (v2r_R @ dR @ v2r_R.T)
         dR_l = tracker_l_now.rotation @ self._ref_l.rotation.T
         dR_r = tracker_r_now.rotation @ self._ref_r.rotation.T
 
-        target_rot_l = dR_l @ self._ee_l_0.rotation
-        target_rot_r = dR_r @ self._ee_r_0.rotation
+        dR_l_robot = self._v2r_R @ dR_l @ self._v2r_R.T
+        dR_r_robot = self._v2r_R @ dR_r @ self._v2r_R.T
+
+        target_rot_l = dR_l_robot @ self._ee_l_0.rotation
+        target_rot_r = dR_r_robot @ self._ee_r_0.rotation
 
         l_SE3 = pin.SE3(target_rot_l, target_pos_l)
         r_SE3 = pin.SE3(target_rot_r, target_pos_r)
