@@ -8,18 +8,24 @@ Subscriptions:
   /teleop/pedal           sensor_msgs/Joy            (from pedal driver)
   /rby1_status_joint      sensor_msgs/JointState     (from rby1 SDK)
 
-Publication:
-  /rby1_teleop_command    rby1_sdk_msgs/JointGroupCommand
+Publications:
+  /rby1_teleop_command    interbotix_xs_msgs/JointGroupCommand
+  # /teleop/record        std_msgs/Bool   (pedal 1 toggle — not yet active)
 
-Clutch logic:
-  Pedal HELD   → tracking active (delta accumulates)
-  Pedal RELEASE → command stops (robot holds position)
+Pedal mapping (3-pedal USB, sensor_msgs/Joy):
+  buttons[0] — HOLD to engage teleoperation (dead-man switch)
+  # buttons[1] — TOGGLE recording start/stop  (not yet active)
+  # buttons[2] — spare                        (not yet active)
+
+Clutch logic (pedal 0):
+  Pedal HELD    → tracking active, /rby1_teleop_command published
+  Pedal RELEASE → publishing stops (robot holds last position)
   On re-engage  → reference pose re-captured (no jump)
 
-Delta computation (ROS frame):
-  Δpos = tracker_now - tracker_ref   (in world frame, rotated to robot frame)
-  target_EE = ee_pose_at_engage + Δpos
-  target_orientation = tracker_now.orientation  (direct mapping)
+Delta computation (robot frame):
+  Δpos_robot  = v2r_R @ (tracker_now - tracker_ref)
+  target_pos  = ee_pos_at_engage + pos_scale * Δpos_robot
+  target_rot  = (v2r_R @ dR @ v2r_R.T) @ ee_rot_at_engage
 """
 
 import numpy as np
@@ -30,6 +36,7 @@ import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import PoseStamped
 from sensor_msgs.msg import Joy, JointState
+# from std_msgs.msg import Bool          # needed when pedal-1 recording is enabled
 from interbotix_xs_msgs.msg import JointGroupCommand
 from rby1_ik.rby1_ik import Rby1Ik
 
@@ -94,8 +101,7 @@ class ViveRby1Node(Node):
         self._pedal_idx   = self.get_parameter('pedal_button_index').value
         rate_hz           = self.get_parameter('publish_rate').value
 
-        # Coordinate transform: tracker (ROS frame) → robot EE frame
-        # Same as v2r_R in small_main.py reference code
+        # Coordinate transform: tracker world frame (ROS, Z-up) → robot base frame
         self._v2r_R = np.array([[0., -1.,  0.],
                                 [-1.,  0.,  0.],
                                 [ 0.,  0., -1.]])
@@ -111,26 +117,32 @@ class ViveRby1Node(Node):
         self._tracker_l: PoseStamped | None = None
         self._tracker_r: PoseStamped | None = None
         self._joint_state: JointState | None = None
-        self._pedal_active = False
+
+        # Pedal state
+        self._pedal_engage_active = False      # buttons[0]: current hold state
+        # self._pedal_record_prev  = False     # buttons[1]: previous state for edge detect
 
         # Clutch state
         self._engaged = False
-        self._ref_l: pin.SE3 | None = None   # tracker pose at engage
+        self._ref_l: pin.SE3 | None = None
         self._ref_r: pin.SE3 | None = None
-        self._ee_l_0: pin.SE3 | None = None  # EE pose at engage (from FK / joint state)
+        self._ee_l_0: pin.SE3 | None = None
         self._ee_r_0: pin.SE3 | None = None
 
         # Subscribers
-        self.create_subscription(PoseStamped, topic_l,  self._cb_tracker_l, 10)
-        self.create_subscription(PoseStamped, topic_r,  self._cb_tracker_r, 10)
-        self.create_subscription(Joy,         topic_p,  self._cb_pedal,     10)
-        self.create_subscription(JointState,  topic_js, self._cb_joint_state, 10)
+        self.create_subscription(PoseStamped, topic_l,  self._cb_tracker_l,    10)
+        self.create_subscription(PoseStamped, topic_r,  self._cb_tracker_r,    10)
+        self.create_subscription(Joy,         topic_p,  self._cb_pedal,        10)
+        self.create_subscription(JointState,  topic_js, self._cb_joint_state,  10)
 
         # Publisher
         self._pub_cmd = self.create_publisher(JointGroupCommand, topic_cmd, 10)
+        # self._pub_record = self.create_publisher(Bool, '/teleop/record', 10)
 
         # Timer
         self._timer = self.create_timer(1.0 / rate_hz, self._timer_cb)
+
+        self.get_logger().info('[vive_rby1] Ready — hold pedal 0 to engage')
 
     # ------------------------------------------------------------------
     # Callbacks
@@ -144,7 +156,6 @@ class ViveRby1Node(Node):
 
     def _cb_joint_state(self, msg: JointState):
         self._joint_state = msg
-        # Keep IK config in sync with real robot
         if self._joint_state is not None:
             self._ik.update_from_joint_state(
                 list(self._joint_state.name),
@@ -152,23 +163,45 @@ class ViveRby1Node(Node):
             )
 
     def _cb_pedal(self, msg: Joy):
-        if self._pedal_idx >= len(msg.buttons):
-            return
-        active = bool(msg.buttons[self._pedal_idx])
+        # ---- Pedal 0: dead-man switch (hold to engage) ----
+        if self._pedal_idx < len(msg.buttons):
+            active = bool(msg.buttons[self._pedal_idx])
+            if active and not self._pedal_engage_active:
+                self._on_engage()
+            elif not active and self._pedal_engage_active:
+                self._on_disengage()
+            self._pedal_engage_active = active
 
-        if active and not self._pedal_active:
-            self._on_engage()
-        elif not active and self._pedal_active:
-            self._on_disengage()
+        # ---- Pedal 1: recording toggle (rising edge) ----
+        # PEDAL_RECORD_IDX = 1
+        # if PEDAL_RECORD_IDX < len(msg.buttons):
+        #     pressed = bool(msg.buttons[PEDAL_RECORD_IDX])
+        #     if pressed and not self._pedal_record_prev:
+        #         self._toggle_recording()
+        #     self._pedal_record_prev = pressed
 
-        self._pedal_active = active
+        # ---- Pedal 2: spare ----
+        # PEDAL_SPARE_IDX = 2
+        # if PEDAL_SPARE_IDX < len(msg.buttons):
+        #     pass  # map when needed
+
+    # ------------------------------------------------------------------
+    # Recording toggle (pedal 1 — not yet active)
+    # ------------------------------------------------------------------
+    # def _toggle_recording(self):
+    #     """Publish a Bool edge on /teleop/record for rosbag control."""
+    #     from std_msgs.msg import Bool
+    #     msg = Bool()
+    #     msg.data = True   # listener handles toggle logic externally
+    #     self._pub_record.publish(msg)
+    #     self.get_logger().info('[vive_rby1] Recording toggle signal sent')
 
     # ------------------------------------------------------------------
     # Clutch engage / disengage
     # ------------------------------------------------------------------
 
     def _on_engage(self):
-        """Capture reference poses when pedal is pressed."""
+        """Capture reference poses when pedal 0 is pressed."""
         if self._tracker_l is None or self._tracker_r is None:
             self.get_logger().warn('Pedal pressed but trackers not ready — ignoring')
             return
@@ -176,7 +209,6 @@ class ViveRby1Node(Node):
         self._ref_l = pose_stamped_to_SE3(self._tracker_l)
         self._ref_r = pose_stamped_to_SE3(self._tracker_r)
 
-        # Capture current EE pose via RobotWrapper FK
         q_pin = self._ik.configuration.q
         fid_l = self._ik.robot.model.getFrameId('tracker_left')
         fid_r = self._ik.robot.model.getFrameId('tracker_right')
@@ -197,23 +229,21 @@ class ViveRby1Node(Node):
     def _timer_cb(self):
         if self._tracker_l is None or self._tracker_r is None:
             return
+        # Publish only while pedal is held — no auto-engage
         if not self._engaged or self._ref_l is None or self._ee_l_0 is None:
-            self._on_engage()
             return
 
         tracker_l_now = pose_stamped_to_SE3(self._tracker_l)
         tracker_r_now = pose_stamped_to_SE3(self._tracker_r)
 
-        # Delta in world (ROS) frame
+        # Delta position in world frame → robot frame
         delta_l = tracker_l_now.translation - self._ref_l.translation
         delta_r = tracker_r_now.translation - self._ref_r.translation
 
-        # Target EE positions = pose at engage + scaled delta (with coord transform)
         target_pos_l = self._ee_l_0.translation + self._pos_scale * (self._v2r_R @ delta_l)
         target_pos_r = self._ee_r_0.translation + self._pos_scale * (self._v2r_R @ delta_r)
 
-        # Target EE orientations: rotate reference EE by tracker rotation delta
-        # Convert delta rotation to robot frame via similarity transform (v2r_R @ dR @ v2r_R.T)
+        # Delta rotation in world frame → robot frame via similarity transform
         dR_l = tracker_l_now.rotation @ self._ref_l.rotation.T
         dR_r = tracker_r_now.rotation @ self._ref_r.rotation.T
 
