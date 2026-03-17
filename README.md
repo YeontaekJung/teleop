@@ -75,6 +75,18 @@ ros2 run manus_inspire manus_inspire_node
 ros2 run inspire_driver inspire_driver_node
 ```
 
+#### Manus Glove Calibration
+
+`manus_inspire` 노드는 손가락 센서 범위 보정을 지원합니다.
+
+- 최초 실행 시 캘리브레이션 파일이 없으면 자동으로 시작
+- 저장 위치: `~/.ros/manus_inspire_calib.yaml` (다음 실행부터 자동 로드)
+- 재캘리브레이션:
+  ```bash
+  ros2 service call /manus_inspire/calibrate std_srvs/srv/Trigger
+  ```
+- **순서:** Phase 1 (4초) — 양손 쫙 펴고 유지 → Phase 2 (4초) — 주먹 꽉 쥐고 유지 → 자동 저장
+
 **Vive → RB-Y1 teleoperation:**
 ```bash
 # Requires: SteamVR running, Vive Trackers paired
