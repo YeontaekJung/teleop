@@ -47,7 +47,7 @@ Obtain from: Manus developer portal, or copy from a machine that already has it.
 
 ```bash
 sudo apt install ros-humble-desktop python3-pip
-pip3 install pin pink scipy openvr evdev
+pip3 install pin pink scipy openvr evdev PySide6
 pip3 install empy==3.3.4   # required for colcon build (do NOT use empy 4.x)
 ```
 
