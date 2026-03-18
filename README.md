@@ -53,8 +53,10 @@ pip3 install empy==3.3.4   # required for colcon build (do NOT use empy 4.x)
 
 > **Note (pedal):** `evdev` requires the user to be in the `input` group:
 > ```bash
-> sudo usermod -aG input $USER  # then re-login
+> sudo usermod -aG input $USER
 > ```
+> 터미널만 닫으면 안 됨 — Ubuntu 세션에서 **완전히 로그아웃 후 재로그인** 해야 적용됨.
+> 적용 확인: `groups` 출력에 `input` 있으면 됨.
 
 > **Note:** If using conda, deactivate it before building — conda's Python conflicts with ROS2.
 > ```bash
