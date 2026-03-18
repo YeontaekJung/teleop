@@ -23,7 +23,7 @@ import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Joy
 
-DEVICE_NAME = 'PCSensor FootSwitch Keyboard'
+DEVICE_NAME = 'PCsensor FootSwitch Keyboard'
 
 KEY_MAP = {
     ecodes.KEY_A: 0,  # Left  pedal → buttons[0]
@@ -56,6 +56,7 @@ class PedalNode(Node):
 
         try:
             self._dev = find_device(dev_name)
+            self._dev.grab()  # exclusive access — prevents a/b/c keystrokes leaking to OS/terminal
             self.get_logger().info(f"Found device: {self._dev.path} — {self._dev.name}")
         except RuntimeError as e:
             self.get_logger().error(str(e))
