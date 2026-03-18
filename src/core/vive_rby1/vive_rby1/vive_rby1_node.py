@@ -76,8 +76,8 @@ class ViveRby1Node(Node):
         super().__init__('vive_rby1_node')
 
         # Parameters
-        self.declare_parameter('urdf_path', '')
-        self.declare_parameter('srdf_path', '')
+        self.declare_parameter('urdf_path', '/home/hss/jyi/2026/robot_description/rby1/rby1.urdf')
+        self.declare_parameter('srdf_path', '/home/hss/jyi/2026/robot_description/rby1/rby1.srdf')
         self.declare_parameter('topic_tracker_left',   '/teleop/tracker/left')
         self.declare_parameter('topic_tracker_right',  '/teleop/tracker/right')
         self.declare_parameter('topic_pedal',          '/teleop/pedal')
