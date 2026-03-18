@@ -119,7 +119,7 @@ class ViveRby1Node(Node):
         self._joint_state: JointState | None = None
 
         # Pedal state
-        # self._pedal_engage_active = False    # buttons[0]: current hold state
+        self._pedal_engage_active = False      # buttons[0]: current hold state
         # self._pedal_record_prev  = False     # buttons[1]: previous state for edge detect
 
         # Clutch state
@@ -172,13 +172,13 @@ class ViveRby1Node(Node):
 
     def _cb_pedal(self, _msg: Joy):
         # ---- Pedal 0: dead-man switch (hold to engage) ----
-        # if self._pedal_idx < len(msg.buttons):
-        #     active = bool(msg.buttons[self._pedal_idx])
-        #     if active and not self._pedal_engage_active:
-        #         self._on_engage()
-        #     elif not active and self._pedal_engage_active:
-        #         self._on_disengage()
-        #     self._pedal_engage_active = active
+        if self._pedal_idx < len(_msg.buttons):
+            active = bool(_msg.buttons[self._pedal_idx])
+            if active and not self._pedal_engage_active:
+                self._on_engage()
+            elif not active and self._pedal_engage_active:
+                self._on_disengage()
+            self._pedal_engage_active = active
 
         # ---- Pedal 1: recording toggle (rising edge) ----
         # PEDAL_RECORD_IDX = 1
