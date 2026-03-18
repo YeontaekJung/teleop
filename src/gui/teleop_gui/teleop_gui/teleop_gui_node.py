@@ -79,6 +79,8 @@ class Signals(QObject):
     pedal_updated       = Signal(list)
     node_status_updated = Signal(dict)
     calib_status        = Signal(str)
+    calib_started       = Signal()   # fired from ROS thread → starts QTimer on main thread
+    calib_failed        = Signal(str)
 
 
 # ---------------------------------------------------------------------------
@@ -95,6 +97,8 @@ class TeleopGuiWindow(QWidget):
         signals.pedal_updated.connect(self._on_pedal)
         signals.node_status_updated.connect(self._on_nodes)
         signals.calib_status.connect(self._on_calib_status)
+        signals.calib_started.connect(self._start_calib_progress)
+        signals.calib_failed.connect(self._on_calib_failed)
 
         self._build_ui()
 
@@ -197,19 +201,26 @@ class TeleopGuiWindow(QWidget):
 
         def done(success, msg):
             if not success:
-                self._sig.calib_status.emit(f'FAILED: {msg}')
-                self._calib_btn.setEnabled(True)
-                return
-            self._sig.calib_status.emit('Phase 1/2: Open hands fully...')
-            self._calib_elapsed = 0.0
-            self._calib_phase   = 1
-            self._calib_tick_timer = QTimer()
-            self._calib_tick_timer.timeout.connect(self._tick_calib)
-            self._calib_tick_timer.start(100)
+                self._sig.calib_failed.emit(f'FAILED: {msg}')
+            else:
+                self._sig.calib_started.emit()  # → main thread starts QTimer
 
         threading.Thread(
             target=self._node.call_calibrate, args=(done,), daemon=True
         ).start()
+
+    def _on_calib_failed(self, msg):
+        self._sig.calib_status.emit(msg)
+        self._calib_btn.setEnabled(True)
+
+    def _start_calib_progress(self):
+        # Called on main Qt thread via signal
+        self._calib_elapsed = 0.0
+        self._calib_phase   = 1
+        self._sig.calib_status.emit('Phase 1/2: Open hands fully...')
+        self._calib_tick_timer = QTimer()
+        self._calib_tick_timer.timeout.connect(self._tick_calib)
+        self._calib_tick_timer.start(100)
 
     def _tick_calib(self):
         self._calib_elapsed += 0.1
