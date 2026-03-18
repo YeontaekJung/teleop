@@ -52,8 +52,9 @@ class ManusInspire(Node):
             self.get_logger().warn("No calibration file found — starting calibration now.")
             self._start_calib()
 
-        self.sub_l = self.create_subscription(ManusGlove, "/manus_glove_0", self.cb_left,  10)
-        self.sub_r = self.create_subscription(ManusGlove, "/manus_glove_1", self.cb_right, 10)
+        # Subscribe to both glove topics with the same callback — side is determined by msg.side
+        self.sub_0 = self.create_subscription(ManusGlove, "/manus_glove_0", self.cb_glove, 10)
+        self.sub_1 = self.create_subscription(ManusGlove, "/manus_glove_1", self.cb_glove, 10)
 
         self.pub_l = self.create_publisher(InspireHandCtrl, "/rt/inspire_hand/ctrl/l", 2)
         self.pub_r = self.create_publisher(InspireHandCtrl, "/rt/inspire_hand/ctrl/r", 2)
@@ -166,21 +167,26 @@ class ManusInspire(Node):
     # --------------------------------------------------
     # Callback
     # --------------------------------------------------
-    def cb_left(self, msg):
-        ergo = {e.type: e.value for e in msg.ergonomics}
-        if self._calib_mode:
-            self._collect_sample('left', ergo)
-            self._advance_calib()
-            return
-        self.pub_l.publish(self.map_manus(ergo, hand='left'))
+    def cb_glove(self, msg):
+        # Determine hand from msg.side ("Left" / "Right") — not from topic number
+        if msg.side == 'Left':
+            hand = 'left'
+        elif msg.side == 'Right':
+            hand = 'right'
+        else:
+            return  # unknown side, skip
 
-    def cb_right(self, msg):
         ergo = {e.type: e.value for e in msg.ergonomics}
         if self._calib_mode:
-            self._collect_sample('right', ergo)
+            self._collect_sample(hand, ergo)
             self._advance_calib()
             return
-        self.pub_r.publish(self.map_manus(ergo, hand='right'))
+
+        ctrl = self.map_manus(ergo, hand=hand)
+        if hand == 'left':
+            self.pub_l.publish(ctrl)
+        else:
+            self.pub_r.publish(ctrl)
 
     # --------------------------------------------------
     # Mapping
