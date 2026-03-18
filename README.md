@@ -47,9 +47,14 @@ Obtain from: Manus developer portal, or copy from a machine that already has it.
 
 ```bash
 sudo apt install ros-humble-desktop python3-pip
-pip3 install pin pink scipy openvr
+pip3 install pin pink scipy openvr evdev
 pip3 install empy==3.3.4   # required for colcon build (do NOT use empy 4.x)
 ```
+
+> **Note (pedal):** `evdev` requires the user to be in the `input` group:
+> ```bash
+> sudo usermod -aG input $USER  # then re-login
+> ```
 
 > **Note:** If using conda, deactivate it before building — conda's Python conflicts with ROS2.
 > ```bash
