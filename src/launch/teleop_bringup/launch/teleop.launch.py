@@ -38,7 +38,6 @@ def generate_launch_description():
         Node(
             package='manus_inspire',
             executable='manus_inspire_node',
-            name='manus_inspire_node',
             output='screen',
         ),
 
