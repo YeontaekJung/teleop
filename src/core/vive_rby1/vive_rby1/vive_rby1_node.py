@@ -182,15 +182,15 @@ class ViveRby1Node(Node):
 
         # ---- Pedal 1: recording toggle (rising edge) ----
         # PEDAL_RECORD_IDX = 1
-        # if PEDAL_RECORD_IDX < len(msg.buttons):
-        #     pressed = bool(msg.buttons[PEDAL_RECORD_IDX])
+        # if PEDAL_RECORD_IDX < len(_msg.buttons):
+        #     pressed = bool(_msg.buttons[PEDAL_RECORD_IDX])
         #     if pressed and not self._pedal_record_prev:
         #         self._toggle_recording()
         #     self._pedal_record_prev = pressed
 
         # ---- Pedal 2: spare ----
         # PEDAL_SPARE_IDX = 2
-        # if PEDAL_SPARE_IDX < len(msg.buttons):
+        # if PEDAL_SPARE_IDX < len(_msg.buttons):
         #     pass  # map when needed
         pass
 
