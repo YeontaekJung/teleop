@@ -42,4 +42,12 @@ def generate_launch_description():
             output='screen',
         ),
 
+        # ── GUI ────────────────────────────────────────────────────────────
+        Node(
+            package='teleop_gui',
+            executable='teleop_gui_node',
+            name='teleop_gui',
+            output='screen',
+        ),
+
     ])
