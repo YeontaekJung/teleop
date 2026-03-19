@@ -81,7 +81,7 @@ class ViveRby1Node(Node):
         self.declare_parameter('topic_tracker_left',   '/teleop/tracker/left')
         self.declare_parameter('topic_tracker_right',  '/teleop/tracker/right')
         self.declare_parameter('topic_pedal',          '/teleop/pedal')
-        self.declare_parameter('topic_joint_state',    '/joint_states')
+        self.declare_parameter('topic_joint_state',    '/rby1_status_joint')
         self.declare_parameter('topic_teleop_command', '/rby1_teleop_command')
         self.declare_parameter('pos_scale',      2.0)
         self.declare_parameter('ik_dt',          0.05)
