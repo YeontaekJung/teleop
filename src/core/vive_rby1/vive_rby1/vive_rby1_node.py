@@ -102,9 +102,10 @@ class ViveRby1Node(Node):
         rate_hz           = self.get_parameter('publish_rate').value
 
         # Coordinate transform: tracker world frame (ROS, Z-up) → robot base frame
-        self._v2r_R = np.array([[0., -1.,  0.],
+        # world +Y (forward) → robot +X,  world +X (right) → robot -Y,  world +Z (up) → robot +Z
+        self._v2r_R = np.array([[0.,  1.,  0.],
                                 [-1.,  0.,  0.],
-                                [ 0.,  0., -1.]])
+                                [ 0.,  0.,  1.]])
 
         # IK solver
         if not urdf_path or not srdf_path:
