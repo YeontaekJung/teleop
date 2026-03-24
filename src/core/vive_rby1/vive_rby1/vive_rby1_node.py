@@ -17,6 +17,12 @@ Publications:
 Services (server):
   /vive_rby1/toggle_episode  std_srvs/Trigger        (GUI Start/End Episode button)
 
+Recording services (client → scm_recording core):
+  /scm_recording/start       StartRecording
+  /scm_recording/end         EndRecording
+  /scm_recording/pause       TogglePause
+  # /scm_recording/status    GetStatus               (not yet used)
+
 Pedal mapping (3-pedal USB, sensor_msgs/Joy):
   buttons[0] — TOGGLE arm engage/disengage
                + auto TogglePause when session active (READY/PAUSED→RECORDING, RECORDING→PAUSED)
