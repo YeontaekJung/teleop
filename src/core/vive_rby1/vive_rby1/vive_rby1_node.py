@@ -320,12 +320,17 @@ class ViveRby1Node(Node):
         self._publish_rec_state()
 
     def _on_toggle_pause_done(self, future):
-        result = future.result()
+        try:
+            result = future.result()
+        except Exception as e:
+            self.get_logger().error(f'TogglePause exception: {e}')
+            return
         if result.result:
             self._rec_state = REC_PAUSED if result.paused else REC_RECORDING
             self.get_logger().info(f'[vive_rby1] {self._rec_state}')
         else:
-            self.get_logger().error(f'TogglePause failed: {result.message}')
+            self.get_logger().error(
+                f'TogglePause failed — result={result.result} paused={result.paused} msg={result.message}')
         self._publish_rec_state()
 
     def _publish_rec_state(self):
