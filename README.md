@@ -9,10 +9,12 @@ Designed to be extensible — additional robot platforms and input devices can b
 ```
 Input              Core                      Output
 ──────────────────────────────────────────────────────────────
-manus_ros2      →  manus_inspire          →  inspire_driver  (Inspire Hand)
-vive_ros2       →  vive_rby1 (+ rby1_ik) →  /rby1_teleop_command  (RB-Y1)
-pedal_ros2      →  (clutch / mode switch)
+manus_ros2      →  manus_inspire          →  inspire_driver       (Inspire Hand)
+vive_ros2       →  vive_rby1 (+ rby1_ik) →  /rby1_teleop_command (RB-Y1)
+pedal_ros2      →  clutch / recording     →  /recording/start|end (recording core)
 ```
+
+All msg/srv definitions are under `src/msgs/`.
 
 A GUI node (`teleop_gui`) provides live system status and calibration control.
 
@@ -192,6 +194,7 @@ ros2 run teleop_gui teleop_gui_node
 | `vive_ros2` | input | Vive Tracker 3.0 → `/teleop/tracker/left\|right` |
 | `manus_ros2_msgs` | msgs | Manus glove message types |
 | `inspire_hand_msgs` | msgs | Inspire hand message types |
+| `scm_recording_msgs` | msgs | Recording core service definitions (StartRecording, EndRecording, GetStatus, TogglePause) |
 | `manus_inspire` | core | Manus glove data → Inspire hand commands |
 | `rby1_ik` | core | Differential IK solver (pink + pinocchio) |
 | `vive_rby1` | core | Tracker delta → RB-Y1 joint commands |

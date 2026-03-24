@@ -39,11 +39,7 @@ from sensor_msgs.msg import Joy, JointState
 from std_msgs.msg import Bool
 from interbotix_xs_msgs.msg import JointGroupCommand
 
-try:
-    from scm_recording_msgs.srv import StartRecording, EndRecording
-    _HAS_RECORDING_MSGS = True
-except ImportError:
-    _HAS_RECORDING_MSGS = False
+from scm_recording_msgs.srv import StartRecording, EndRecording
 from rby1_ik.rby1_ik import Rby1Ik
 
 
@@ -153,14 +149,9 @@ class ViveRby1Node(Node):
         self._pub_cmd = self.create_publisher(JointGroupCommand, topic_cmd, 10)
         self._pub_rec = self.create_publisher(Bool, '/teleop/recording', 10)
 
-        # Recording service clients (scm_recording_msgs — source external ws before launch)
-        if _HAS_RECORDING_MSGS:
-            self._cli_start_rec = self.create_client(StartRecording, '/recording/start')
-            self._cli_end_rec   = self.create_client(EndRecording,   '/recording/end')
-        else:
-            self._cli_start_rec = None
-            self._cli_end_rec   = None
-            self.get_logger().warn('[vive_rby1] scm_recording_msgs not found — recording disabled')
+        # Recording service clients
+        self._cli_start_rec = self.create_client(StartRecording, '/recording/start')
+        self._cli_end_rec   = self.create_client(EndRecording,   '/recording/end')
 
         # Timer
         self._timer = self.create_timer(1.0 / rate_hz, self._timer_cb)
@@ -209,9 +200,6 @@ class ViveRby1Node(Node):
     # ------------------------------------------------------------------
 
     def _toggle_recording(self):
-        if self._cli_start_rec is None:
-            self.get_logger().warn('[vive_rby1] Recording unavailable — scm_recording_msgs not sourced')
-            return
         if not self._recording_active:
             if not self._cli_start_rec.service_is_ready():
                 self.get_logger().warn('[vive_rby1] StartRecording service not available')

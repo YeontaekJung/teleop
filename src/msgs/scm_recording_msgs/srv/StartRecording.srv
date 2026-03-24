@@ -1,0 +1,8 @@
+int32 task_id
+---
+bool result
+string message
+int32 task_id
+int32 episode_id
+string vla_path
+string others_path

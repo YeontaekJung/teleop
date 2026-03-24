@@ -17,7 +17,7 @@
   <exec_depend>rby1_ik</exec_depend>
 
   <!-- rby1_sdk_msgs: JointGroupCommand - install separately from rby1 SDK -->
-  <!-- scm_recording_msgs: StartRecording/EndRecording - source external workspace before launch -->
+  <exec_depend>scm_recording_msgs</exec_depend>
 
   <export>
     <build_type>ament_python</build_type>

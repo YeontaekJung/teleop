@@ -1,0 +1,9 @@
+---
+string state
+int32 task_id
+int32 episode_id
+int64 step_index
+string vla_path
+string others_path
+bool recording_active
+bool paused
