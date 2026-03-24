@@ -11,7 +11,7 @@ Input              Core                      Output
 ──────────────────────────────────────────────────────────────
 manus_ros2      →  manus_inspire          →  inspire_driver       (Inspire Hand)
 vive_ros2       →  vive_rby1 (+ rby1_ik) →  /rby1_teleop_command (RB-Y1)
-pedal_ros2      →  clutch / recording     →  /recording/start|end (recording core)
+pedal_ros2      →  clutch / recording     →  /scm_recording/start|end|toggle_pause (recording core)
 ```
 
 All msg/srv definitions are under `src/msgs/`.
@@ -136,18 +136,47 @@ ros2 launch teleop_bringup teleop.launch.py
 
 This launches all nodes: pedal driver, Vive tracker, Manus publisher, arm IK bridge, hand mapper, and GUI.
 
-The GUI shows live node status, pedal state, and the calibration panel.
+The GUI shows live node status, pedal state, recording state, and the calibration panel.
 
 ## Usage
+
+### Pedal Mapping
+
+| Pedal | Mode | Function |
+|-------|------|----------|
+| A (left) | Toggle | Arm engage / disengage |
+| B (center) | — | Spare |
+| C (right) | Toggle | Start / End recording episode |
 
 ### Teleoperation
 
 1. Launch the full system with the command above.
 2. Confirm all nodes show green in the GUI.
-3. **Hold pedal A** to engage tracking (dead-man switch).
-   - While held: tracker poses are mapped to robot joint commands in real time.
-   - On release: robot holds its last position.
-   - On re-engage: reference pose is re-captured — no position jump.
+3. **Press pedal A** to engage arm tracking (toggle).
+   - Engaged: tracker poses mapped to robot joint commands in real time.
+   - Disengaged: robot holds last position.
+   - On re-engage: reference pose re-captured — no position jump.
+   - Vive trackers must be detected before engage is accepted.
+
+### Recording
+
+Requires the `scm_recording` core to be running and `/scm_recording/*` services to be available.
+
+1. Select `task_id` (0–3) in the GUI Recording panel.
+2. Click **▶ Start Episode** (or press pedal C) — system enters READY state.
+3. **Press pedal A** to engage arm → recording starts automatically (RECORDING).
+4. **Press pedal A** to disengage → recording pauses automatically (PAUSED).
+5. Repeat steps 3–4 to collect data across multiple engage cycles.
+6. Click **■ End Episode** (or press pedal C) when in PAUSED state — episode saved.
+
+Recording states:
+
+| State | Color | Meaning |
+|-------|-------|---------|
+| IDLE | grey | No active session |
+| READY | yellow | Session started, waiting for arm engage |
+| RECORDING | red | Arm engaged, data being recorded |
+| PAUSED | orange | Arm disengaged, session still active |
 
 ### Manus Hand Calibration
 
