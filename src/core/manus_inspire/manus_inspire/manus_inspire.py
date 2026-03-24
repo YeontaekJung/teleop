@@ -201,11 +201,11 @@ class ManusInspire(Node):
         pinky_flex  = self.weighted_flex(ergo.get("PinkyMCPStretch",  0.0), ergo.get("PinkyPIPStretch",  0.0), ergo.get("PinkyDIPStretch",  0.0))
         thumb_flex  = self.weighted_flex(ergo.get("ThumbMCPStretch",  0.0), ergo.get("ThumbPIPStretch",  0.0), ergo.get("ThumbDIPStretch",  0.0))
 
-        index  = self.flex_to_inspire(index_flex,  c['index']['min'],  c['index']['max'],  invert=False)
-        middle = self.flex_to_inspire(middle_flex, c['middle']['min'], c['middle']['max'], invert=False)
-        ring   = self.flex_to_inspire(ring_flex,   c['ring']['min'],   c['ring']['max'],   invert=False)
-        pinky  = self.flex_to_inspire(pinky_flex,  c['pinky']['min'],  c['pinky']['max'],  invert=False)
-        thumb  = self.flex_to_inspire(thumb_flex,  c['thumb']['min'],  c['thumb']['max'],  invert=False)
+        index  = self.flex_to_inspire(index_flex,  c['index']['min'],  c['index']['max'],  invert=True)
+        middle = self.flex_to_inspire(middle_flex, c['middle']['min'], c['middle']['max'], invert=True)
+        ring   = self.flex_to_inspire(ring_flex,   c['ring']['min'],   c['ring']['max'],   invert=True)
+        pinky  = self.flex_to_inspire(pinky_flex,  c['pinky']['min'],  c['pinky']['max'],  invert=True)
+        thumb  = self.flex_to_inspire(thumb_flex,  c['thumb']['min'],  c['thumb']['max'],  invert=True)
 
         spread_raw  = ergo.get("ThumbMCPSpread", 0.0)
         spread_rng  = max(c['spread']['max'] - c['spread']['min'], 1.0)
