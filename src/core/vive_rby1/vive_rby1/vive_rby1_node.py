@@ -268,7 +268,9 @@ class ViveRby1Node(Node):
             req = StartRecording.Request()
             req.task_id = self._rec_task_id
             self._cli_start_rec.call_async(req).add_done_callback(self._on_start_done)
-        else:
+        elif self._rec_state == REC_RECORDING:
+            self.get_logger().warn('EndRecording blocked — disengage arm first (must be PAUSED)')
+        else:  # READY or PAUSED
             if not self._cli_end_rec.service_is_ready():
                 self.get_logger().warn('EndRecording service not available')
                 return
@@ -282,9 +284,7 @@ class ViveRby1Node(Node):
         return resp
 
     def _call_toggle_pause(self):
-        if not self._cli_toggle_pause.service_is_ready():
-            self.get_logger().warn('TogglePause service not available')
-            return
+        # Don't check service_is_ready() — server may only advertise after session starts
         self._cli_toggle_pause.call_async(TogglePause.Request()).add_done_callback(
             self._on_toggle_pause_done)
 

@@ -197,6 +197,9 @@ class TeleopGuiWindow(QWidget):
         self._rec_state_label = QLabel('⬤ IDLE')
         self._rec_state_label.setFont(QFont('Monospace', 12))
         self._rec_state_label.setStyleSheet('color: #888;')
+        self._rec_countdown = 0
+        self._rec_countdown_timer = QTimer()
+        self._rec_countdown_timer.timeout.connect(self._tick_countdown)
 
         # task_id row
         task_row = QHBoxLayout()
@@ -263,6 +266,7 @@ class TeleopGuiWindow(QWidget):
                 self._node_dots[node].setStyleSheet(f'color: {color};')
 
     def _on_rec_state(self, state: str):
+        prev_state = self._rec_state
         self._rec_state = state
         text, color = REC_STATE_STYLE.get(state, ('⬤ ' + state, '#888'))
         self._rec_state_label.setText(text)
@@ -272,14 +276,36 @@ class TeleopGuiWindow(QWidget):
         self._task_combo.setEnabled(is_idle)
 
         if is_idle:
+            self._rec_countdown_timer.stop()
             self._rec_btn.setText('▶  Start Episode')
             self._rec_btn.setStyleSheet(
                 'background-color: #4CAF50; color: white; font-weight: bold;')
+            self._rec_btn.setEnabled(True)
             self._ep_label.setText('—')
+        elif prev_state == 'IDLE' and state == 'READY':
+            # Just started — 3-second countdown before End button appears
+            self._rec_btn.setText('Starting in 3...')
+            self._rec_btn.setStyleSheet(
+                'background-color: #888; color: white; font-weight: bold;')
+            self._rec_btn.setEnabled(False)
+            self._rec_countdown = 3
+            self._rec_countdown_timer.start(1000)
         else:
             self._rec_btn.setText('■  End Episode')
             self._rec_btn.setStyleSheet(
                 'background-color: #E53935; color: white; font-weight: bold;')
+            self._rec_btn.setEnabled(state in ('READY', 'PAUSED'))
+
+    def _tick_countdown(self):
+        self._rec_countdown -= 1
+        if self._rec_countdown > 0:
+            self._rec_btn.setText(f'Starting in {self._rec_countdown}...')
+        else:
+            self._rec_countdown_timer.stop()
+            self._rec_btn.setText('■  End Episode')
+            self._rec_btn.setStyleSheet(
+                'background-color: #E53935; color: white; font-weight: bold;')
+            self._rec_btn.setEnabled(True)
 
     def _on_rec_episode(self, episode: int):
         self._ep_label.setText(str(episode) if episode >= 0 else '—')
