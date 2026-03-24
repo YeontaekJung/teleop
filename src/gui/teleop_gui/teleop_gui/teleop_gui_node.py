@@ -14,6 +14,7 @@ import threading
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Joy
+from std_msgs.msg import Bool
 from std_srvs.srv import Trigger
 
 from PySide6.QtWidgets import (
@@ -45,8 +46,10 @@ class TeleopGuiNode(Node):
         self._pedal_state = [0, 0, 0]
         self._pedal_cbs = []
         self._node_status_cbs = []
+        self._recording_cbs = []
 
-        self.create_subscription(Joy, '/teleop/pedal', self._cb_pedal, 10)
+        self.create_subscription(Joy,  '/teleop/pedal',     self._cb_pedal,     10)
+        self.create_subscription(Bool, '/teleop/recording', self._cb_recording, 10)
         self.create_timer(1.0, self._poll_nodes)
         self._calib_client = self.create_client(Trigger, '/manus_inspire/calibrate')
 
@@ -55,6 +58,10 @@ class TeleopGuiNode(Node):
         self._pedal_state = state[:3]
         for cb in self._pedal_cbs:
             cb(self._pedal_state)
+
+    def _cb_recording(self, msg: Bool):
+        for cb in self._recording_cbs:
+            cb(msg.data)
 
     def _poll_nodes(self):
         names = {n for n, _ in self.get_node_names_and_namespaces()}
@@ -81,6 +88,7 @@ class Signals(QObject):
     calib_status        = Signal(str)
     calib_started       = Signal()   # fired from ROS thread → starts QTimer on main thread
     calib_failed        = Signal(str)
+    recording_changed   = Signal(bool)
 
 
 # ---------------------------------------------------------------------------
@@ -99,6 +107,11 @@ class TeleopGuiWindow(QWidget):
         signals.calib_status.connect(self._on_calib_status)
         signals.calib_started.connect(self._start_calib_progress)
         signals.calib_failed.connect(self._on_calib_failed)
+        signals.recording_changed.connect(self._on_recording_changed)
+
+        self._rec_blink_timer = QTimer()
+        self._rec_blink_timer.timeout.connect(self._blink_record)
+        self._rec_blink_state = False
 
         self._build_ui()
 
@@ -141,7 +154,7 @@ class TeleopGuiWindow(QWidget):
         layout = QHBoxLayout()
 
         self._pedal_btns = []
-        for label in ['Engage', 'Record', 'Spare']:
+        for label in ['Engage', '—', 'Record']:
             btn = QPushButton(label)
             btn.setEnabled(False)
             btn.setFixedHeight(36)
@@ -188,6 +201,19 @@ class TeleopGuiWindow(QWidget):
 
     def _on_calib_status(self, text):
         self._calib_label.setText(f'Status: {text}')
+
+    def _on_recording_changed(self, active: bool):
+        rec_btn = self._pedal_btns[2]
+        if active:
+            self._rec_blink_timer.start(500)
+        else:
+            self._rec_blink_timer.stop()
+            rec_btn.setStyleSheet('background-color: #ccc; color: #444;')
+
+    def _blink_record(self):
+        self._rec_blink_state = not self._rec_blink_state
+        color = '#2ECC40' if self._rec_blink_state else '#145220'
+        self._pedal_btns[2].setStyleSheet(f'background-color: {color}; color: #fff;')
 
     # ------------------------------------------------------------------
     # Calibration flow
@@ -252,6 +278,7 @@ def main(args=None):
     # Wire ROS callbacks → Qt signals (thread-safe)
     ros_node._pedal_cbs.append(       lambda s: signals.pedal_updated.emit(s))
     ros_node._node_status_cbs.append( lambda s: signals.node_status_updated.emit(s))
+    ros_node._recording_cbs.append(   lambda a: signals.recording_changed.emit(a))
 
     # Spin ROS in background thread
     spin_thread = threading.Thread(

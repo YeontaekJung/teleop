@@ -10,12 +10,12 @@ Subscriptions:
 
 Publications:
   /rby1_teleop_command    interbotix_xs_msgs/JointGroupCommand
-  # /teleop/record        std_msgs/Bool   (pedal 1 toggle — not yet active)
+  /teleop/recording       std_msgs/Bool              (recording active state)
 
 Pedal mapping (3-pedal USB, sensor_msgs/Joy):
   buttons[0] — HOLD to engage teleoperation (dead-man switch)
-  # buttons[1] — TOGGLE recording start/stop  (not yet active)
-  # buttons[2] — spare                        (not yet active)
+  buttons[1] — (spare)
+  buttons[2] — TOGGLE recording start/stop
 
 Clutch logic (pedal 0):
   Pedal HELD    → tracking active, /rby1_teleop_command published
@@ -36,8 +36,9 @@ import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import PoseStamped
 from sensor_msgs.msg import Joy, JointState
-# from std_msgs.msg import Bool          # needed when pedal-1 recording is enabled
+from std_msgs.msg import Bool
 from interbotix_xs_msgs.msg import JointGroupCommand
+from scm_recording_msgs.srv import StartRecording, EndRecording
 from rby1_ik.rby1_ik import Rby1Ik
 
 
@@ -87,6 +88,8 @@ class ViveRby1Node(Node):
         self.declare_parameter('ik_dt',          0.05)
         self.declare_parameter('publish_rate',   20.0)
         self.declare_parameter('pedal_button_index', 0)
+        self.declare_parameter('pedal_record_index', 2)
+        self.declare_parameter('recording_task_id',  0)
 
         urdf_path = self.get_parameter('urdf_path').value
         srdf_path = self.get_parameter('srdf_path').value
@@ -96,10 +99,12 @@ class ViveRby1Node(Node):
         topic_js  = self.get_parameter('topic_joint_state').value
         topic_cmd = self.get_parameter('topic_teleop_command').value
 
-        self._pos_scale   = self.get_parameter('pos_scale').value
-        self._ik_dt       = self.get_parameter('ik_dt').value
-        self._pedal_idx   = self.get_parameter('pedal_button_index').value
-        rate_hz           = self.get_parameter('publish_rate').value
+        self._pos_scale       = self.get_parameter('pos_scale').value
+        self._ik_dt           = self.get_parameter('ik_dt').value
+        self._pedal_idx       = self.get_parameter('pedal_button_index').value
+        self._pedal_rec_idx   = self.get_parameter('pedal_record_index').value
+        self._recording_task  = self.get_parameter('recording_task_id').value
+        rate_hz               = self.get_parameter('publish_rate').value
 
         # Coordinate transform: tracker world frame (ROS, Z-up) → robot base frame
         # world +Y (forward) → robot +X,  world +X (right) → robot -Y,  world +Z (up) → robot +Z
@@ -120,8 +125,11 @@ class ViveRby1Node(Node):
         self._joint_state: JointState | None = None
 
         # Pedal state
-        self._pedal_engage_active = False      # buttons[0]: current hold state
-        # self._pedal_record_prev  = False     # buttons[1]: previous state for edge detect
+        self._pedal_engage_active = False   # buttons[0]: current hold state
+        self._pedal_record_prev   = False   # buttons[2]: previous state for edge detect
+
+        # Recording state
+        self._recording_active = False
 
         # Clutch state
         self._engaged = False
@@ -136,17 +144,13 @@ class ViveRby1Node(Node):
         self.create_subscription(Joy,         topic_p,  self._cb_pedal,        10)
         self.create_subscription(JointState,  topic_js, self._cb_joint_state,  10)
 
-        # Publisher
+        # Publishers
         self._pub_cmd = self.create_publisher(JointGroupCommand, topic_cmd, 10)
+        self._pub_rec = self.create_publisher(Bool, '/teleop/recording', 10)
 
-        # Recording service server (called from external recording core)
-        # Service: /vive_rby1/set_recording  std_srvs/SetBool
-        #   request.data = True  → start recording
-        #   request.data = False → stop recording
-        # self._recording_active = False
-        # self._srv_recording = self.create_service(
-        #     SetBool, '~/set_recording', self._srv_set_recording)
-        # -- import needed: from std_srvs.srv import SetBool
+        # Recording service clients (scm_recording_msgs — source external ws before launch)
+        self._cli_start_rec = self.create_client(StartRecording, '/recording/start')
+        self._cli_end_rec   = self.create_client(EndRecording,   '/recording/end')
 
         # Timer
         self._timer = self.create_timer(1.0 / rate_hz, self._timer_cb)
@@ -181,33 +185,53 @@ class ViveRby1Node(Node):
                 self._on_disengage()
             self._pedal_engage_active = active
 
-        # ---- Pedal 1: recording toggle (rising edge) ----
-        # PEDAL_RECORD_IDX = 1
-        # if PEDAL_RECORD_IDX < len(_msg.buttons):
-        #     pressed = bool(_msg.buttons[PEDAL_RECORD_IDX])
-        #     if pressed and not self._pedal_record_prev:
-        #         self._toggle_recording()
-        #     self._pedal_record_prev = pressed
+        # ---- Pedal 1: spare ----
 
-        # ---- Pedal 2: spare ----
-        # PEDAL_SPARE_IDX = 2
-        # if PEDAL_SPARE_IDX < len(_msg.buttons):
-        #     pass  # map when needed
-        pass
+        # ---- Pedal 2: recording toggle (rising edge) ----
+        if self._pedal_rec_idx < len(_msg.buttons):
+            pressed = bool(_msg.buttons[self._pedal_rec_idx])
+            if pressed and not self._pedal_record_prev:
+                self._toggle_recording()
+            self._pedal_record_prev = pressed
 
     # ------------------------------------------------------------------
-    # Recording service handler (not yet active)
-    # Service: /vive_rby1/set_recording  std_srvs/SetBool
-    #   True  → start recording
-    #   False → stop recording
+    # Recording toggle (pedal 2)
     # ------------------------------------------------------------------
-    # def _srv_set_recording(self, req, resp):
-    #     self._recording_active = req.data
-    #     state = 'STARTED' if req.data else 'STOPPED'
-    #     self.get_logger().info(f'[vive_rby1] Recording {state}')
-    #     resp.success = True
-    #     resp.message = f'Recording {state.lower()}'
-    #     return resp
+
+    def _toggle_recording(self):
+        if not self._recording_active:
+            if not self._cli_start_rec.service_is_ready():
+                self.get_logger().warn('[vive_rby1] StartRecording service not available')
+                return
+            req = StartRecording.Request()
+            req.task_id = self._recording_task
+            future = self._cli_start_rec.call_async(req)
+            future.add_done_callback(self._on_start_recording_done)
+        else:
+            if not self._cli_end_rec.service_is_ready():
+                self.get_logger().warn('[vive_rby1] EndRecording service not available')
+                return
+            future = self._cli_end_rec.call_async(EndRecording.Request())
+            future.add_done_callback(self._on_end_recording_done)
+
+    def _on_start_recording_done(self, future):
+        result = future.result()
+        if result.result:
+            self._recording_active = True
+            self.get_logger().info(
+                f'[vive_rby1] Recording STARTED — episode {result.episode_id}')
+        else:
+            self.get_logger().error(f'[vive_rby1] StartRecording failed: {result.message}')
+        self._pub_rec.publish(Bool(data=self._recording_active))
+
+    def _on_end_recording_done(self, future):
+        result = future.result()
+        if result.result:
+            self._recording_active = False
+            self.get_logger().info('[vive_rby1] Recording ENDED')
+        else:
+            self.get_logger().error(f'[vive_rby1] EndRecording failed: {result.message}')
+        self._pub_rec.publish(Bool(data=self._recording_active))
 
     # ------------------------------------------------------------------
     # Clutch engage / disengage

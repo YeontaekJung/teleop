@@ -2,7 +2,13 @@
   "permissions": {
     "allow": [
       "WebFetch(domain:claude.ai)",
-      "Bash(find d:/GitHub/2026 -name *.launch.py -o -name *.launch)"
+      "Bash(find d:/GitHub/2026 -name *.launch.py -o -name *.launch)",
+      "Bash(mkdir -p d:/GitHub/2026/src/input/pedal_ros2/resource)",
+      "Bash(touch d:/GitHub/2026/src/input/pedal_ros2/resource/pedal_ros2)",
+      "Bash(mkdir -p d:/GitHub/2026/src/gui/teleop_gui/teleop_gui)",
+      "Bash(mkdir -p d:/GitHub/2026/src/gui/teleop_gui/resource)",
+      "Bash(touch d:/GitHub/2026/src/gui/teleop_gui/teleop_gui/__init__.py)",
+      "Bash(touch d:/GitHub/2026/src/gui/teleop_gui/resource/teleop_gui)"
     ]
   }
 }
