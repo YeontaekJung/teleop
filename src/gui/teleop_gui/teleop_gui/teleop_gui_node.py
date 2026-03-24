@@ -109,9 +109,6 @@ class TeleopGuiWindow(QWidget):
         signals.calib_failed.connect(self._on_calib_failed)
         signals.recording_changed.connect(self._on_recording_changed)
 
-        self._rec_blink_timer = QTimer()
-        self._rec_blink_timer.timeout.connect(self._blink_record)
-        self._rec_blink_state = False
 
         self._build_ui()
 
@@ -189,7 +186,9 @@ class TeleopGuiWindow(QWidget):
     # ------------------------------------------------------------------
 
     def _on_pedal(self, state):
-        for btn, pressed in zip(self._pedal_btns, state):
+        for i, (btn, pressed) in enumerate(zip(self._pedal_btns, state)):
+            if i == 2:
+                continue  # Record button is managed by _on_recording_changed
             color = '#A6D256' if pressed else '#ccc'
             btn.setStyleSheet(f'background-color: {color}; color: #333;')
 
@@ -205,15 +204,9 @@ class TeleopGuiWindow(QWidget):
     def _on_recording_changed(self, active: bool):
         rec_btn = self._pedal_btns[2]
         if active:
-            self._rec_blink_timer.start(500)
+            rec_btn.setStyleSheet('background-color: #2ECC40; color: #fff;')
         else:
-            self._rec_blink_timer.stop()
             rec_btn.setStyleSheet('background-color: #ccc; color: #444;')
-
-    def _blink_record(self):
-        self._rec_blink_state = not self._rec_blink_state
-        color = '#2ECC40' if self._rec_blink_state else '#145220'
-        self._pedal_btns[2].setStyleSheet(f'background-color: {color}; color: #fff;')
 
     # ------------------------------------------------------------------
     # Calibration flow
