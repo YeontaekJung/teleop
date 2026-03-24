@@ -218,13 +218,6 @@ ros2 run teleop_gui teleop_gui_node
 **ManusSDK not found**
 - Confirm `ManusSDK/include/ManusSDK.h` and `ManusSDK/lib/libManusSDK.so` exist at the repo root.
 
-## Reference Files (root)
-
-Original working prototypes kept for reference — do not run directly:
-- `vive_manager.py` — original OpenVR + ZMQ tracker reader
-- `rby1_ik_pink.py` — original pink IK implementation
-- `small_main.py` — original Qt GUI + delta IK node
-
 ## Versions
 
 | Tag | Description |
