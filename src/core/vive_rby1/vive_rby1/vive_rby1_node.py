@@ -20,7 +20,7 @@ Services (server):
 Recording services (client → scm_recording core):
   /scm_recording/start       StartRecording
   /scm_recording/end         EndRecording
-  /scm_recording/pause       TogglePause
+  /scm_recording/toggle_pause  TogglePause
   # /scm_recording/status    GetStatus               (not yet used)
 
 Pedal mapping (3-pedal USB, sensor_msgs/Joy):
@@ -175,7 +175,7 @@ class ViveRby1Node(Node):
         # Recording service clients
         self._cli_start_rec    = self.create_client(StartRecording, '/scm_recording/start')
         self._cli_end_rec      = self.create_client(EndRecording,   '/scm_recording/end')
-        self._cli_toggle_pause = self.create_client(TogglePause,    '/scm_recording/pause')
+        self._cli_toggle_pause = self.create_client(TogglePause,    '/scm_recording/toggle_pause')
 
         # Service server: GUI Start/End Episode button
         self.create_service(Trigger, '/vive_rby1/toggle_episode', self._srv_toggle_episode)
