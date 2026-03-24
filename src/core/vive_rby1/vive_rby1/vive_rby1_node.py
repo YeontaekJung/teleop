@@ -210,8 +210,10 @@ class ViveRby1Node(Node):
             if pressed and not self._pedal_engage_prev:
                 if self._engaged:
                     self._on_disengage()
-                else:
+                elif self._tracker_l is not None and self._tracker_r is not None:
                     self._on_engage()
+                else:
+                    self.get_logger().warn('Cannot engage — Vive trackers not ready')
             self._pedal_engage_prev = pressed
 
         # ---- Pedal 1: spare ----
@@ -299,6 +301,9 @@ class ViveRby1Node(Node):
             self._rec_episode = result.episode_id
             self.get_logger().info(
                 f'[vive_rby1] READY — task {result.task_id} ep {result.episode_id}')
+            # Already engaged while waiting for response → auto-resume immediately
+            if self._engaged:
+                self._call_toggle_pause()
         else:
             self.get_logger().error(f'StartRecording failed: {result.message}')
         self._publish_rec_state()
