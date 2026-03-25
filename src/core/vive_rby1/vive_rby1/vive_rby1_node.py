@@ -354,10 +354,17 @@ class ViveRby1Node(Node):
             return
         goal_msg = Rby1Command.Goal()
         goal_msg.command = command
+        self.get_logger().info(f'[vive_rby1] sending rby1_command: {command}')
         future = self._rby1_client.send_goal_async(goal_msg)
         if then:
-            future.add_done_callback(
-                lambda _: self._send_rby1_command(then))
+            def _on_accepted(goal_future):
+                goal_handle = goal_future.result()
+                if not goal_handle.accepted:
+                    self.get_logger().warn(f'rby1_command "{command}" rejected')
+                    return
+                goal_handle.get_result_async().add_done_callback(
+                    lambda _: self._send_rby1_command(then))
+            future.add_done_callback(_on_accepted)
 
     def _on_toggle_pause_done(self, future):
         try:
