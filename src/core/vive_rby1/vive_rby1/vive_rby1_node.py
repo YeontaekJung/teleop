@@ -54,7 +54,11 @@ from sensor_msgs.msg import Joy, JointState
 from std_msgs.msg import Int32, String
 from std_srvs.srv import Trigger
 from interbotix_xs_msgs.msg import JointGroupCommand
-from rby1_core_msgs.action import Rby1Command
+try:
+    from rby1_core_msgs.action import Rby1Command
+    _HAS_RBY1_CORE_MSGS = True
+except ImportError:
+    _HAS_RBY1_CORE_MSGS = False
 
 from scm_recording_msgs.srv import StartRecording, EndRecording, TogglePause
 from rby1_ik.rby1_ik import Rby1Ik
@@ -186,8 +190,12 @@ class ViveRby1Node(Node):
         self._cli_end_rec      = self.create_client(EndRecording,   '/scm_recording/end')
         self._cli_toggle_pause = self.create_client(TogglePause,    '/scm_recording/toggle_pause')
 
-        # RB-Y1 command action client
-        self._rby1_client = ActionClient(self, Rby1Command, '/rby1_command')
+        # RB-Y1 command action client (optional — requires rby1_core_msgs)
+        if _HAS_RBY1_CORE_MSGS:
+            self._rby1_client = ActionClient(self, Rby1Command, '/rby1_command')
+        else:
+            self._rby1_client = None
+            self.get_logger().warn('[vive_rby1] rby1_core_msgs not found — vla_pose2 disabled')
 
         # Service server: GUI Start/End Episode button
         self.create_service(Trigger, '/vive_rby1/toggle_episode', self._srv_toggle_episode)
@@ -339,6 +347,8 @@ class ViveRby1Node(Node):
         self._publish_rec_state()
 
     def _send_rby1_command(self, command: str):
+        if self._rby1_client is None:
+            return
         if not self._rby1_client.server_is_ready():
             self.get_logger().warn(f'rby1_command server not ready — skipping "{command}"')
             return
