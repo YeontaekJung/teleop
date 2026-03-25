@@ -136,7 +136,7 @@ ros2 launch teleop_bringup teleop.launch.py
 
 This launches all nodes: pedal driver, Vive tracker, Manus publisher, arm IK bridge, hand mapper, and GUI.
 
-The GUI shows live node status, pedal state, recording state, and the calibration panel.
+The GUI shows live node status, pedal state, recording state, control mode selector, and the calibration panel.
 
 ## Usage
 
@@ -163,11 +163,13 @@ The GUI shows live node status, pedal state, recording state, and the calibratio
 Requires the `scm_recording` core to be running and `/scm_recording/*` services to be available.
 
 1. Select `task_id` (0–3) in the GUI Recording panel.
-2. Click **▶ Start Episode** (or press pedal C) — system enters READY state.
-3. **Press pedal A** to engage arm → recording starts automatically (RECORDING).
-4. **Press pedal A** to disengage → recording pauses automatically (PAUSED).
-5. Repeat steps 3–4 to collect data across multiple engage cycles.
-6. Click **■ End Episode** (or press pedal C) when in PAUSED state — episode saved.
+2. Select control mode: **Position** or **Impedance** (affects which command topic is used).
+3. Click **▶ Start Episode** (or press pedal C) — system enters READY state.
+4. **Press pedal A** to engage arm → recording starts automatically (RECORDING).
+5. **Press pedal A** to disengage → recording pauses automatically (PAUSED).
+6. Repeat steps 4–5 to collect data across multiple engage cycles.
+7. Click **■ End Episode** (or press pedal C) when in PAUSED state — episode saved.
+8. Robot automatically moves to `vla_pose2` (home pose) after episode ends.
 
 Recording states:
 
@@ -227,7 +229,7 @@ ros2 run teleop_gui teleop_gui_node
 | `manus_inspire` | core | Manus glove data → Inspire hand commands |
 | `rby1_ik` | core | Differential IK solver (pink + pinocchio) |
 | `vive_rby1` | core | Tracker delta → RB-Y1 joint commands |
-| `teleop_gui` | gui | PySide6 status/calibration GUI |
+| `teleop_gui` | gui | PySide6 status/calibration GUI (node status, pedal, recording, control mode) |
 | `teleop_bringup` | launch | Launch file for full system |
 | `inspire_driver` | output | Inspire hand hardware driver |
 
@@ -249,10 +251,3 @@ ros2 run teleop_gui teleop_gui_node
 
 **ManusSDK not found**
 - Confirm `ManusSDK/include/ManusSDK.h` and `ManusSDK/lib/libManusSDK.so` exist at the repo root.
-
-## Versions
-
-| Tag | Description |
-|-----|-------------|
-| `v0.1-manus-only` | Manus glove + Inspire hand only |
-| `v0.2-teleop-core` | Added Vive tracker + RB-Y1 IK packages |
