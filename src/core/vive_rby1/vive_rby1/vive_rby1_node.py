@@ -340,13 +340,13 @@ class ViveRby1Node(Node):
             self._rec_state   = REC_IDLE
             self._rec_episode = -1
             self._engaged     = False
-            self.get_logger().info('[vive_rby1] Recording ENDED — moving to vla_pose2')
-            self._send_rby1_command('vla_pose2')
+            self.get_logger().info('[vive_rby1] Recording ENDED — teleop_stop → vla_pose2')
+            self._send_rby1_command('teleop_stop', then='vla_pose2')
         else:
             self.get_logger().error(f'EndRecording failed: {result.message}')
         self._publish_rec_state()
 
-    def _send_rby1_command(self, command: str):
+    def _send_rby1_command(self, command: str, then: str = None):
         if self._rby1_client is None:
             return
         if not self._rby1_client.server_is_ready():
@@ -354,7 +354,10 @@ class ViveRby1Node(Node):
             return
         goal_msg = Rby1Command.Goal()
         goal_msg.command = command
-        self._rby1_client.send_goal_async(goal_msg)
+        future = self._rby1_client.send_goal_async(goal_msg)
+        if then:
+            future.add_done_callback(
+                lambda _: self._send_rby1_command(then))
 
     def _on_toggle_pause_done(self, future):
         try:
