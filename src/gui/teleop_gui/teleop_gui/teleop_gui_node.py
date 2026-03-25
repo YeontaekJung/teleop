@@ -21,7 +21,7 @@ from std_srvs.srv import Trigger
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout,
     QGroupBox, QLabel, QPushButton, QProgressBar, QGridLayout,
-    QComboBox,
+    QComboBox, QRadioButton, QButtonGroup,
 )
 from PySide6.QtCore import Qt, QTimer, Signal, QObject
 from PySide6.QtGui import QFont
@@ -65,7 +65,8 @@ class TeleopGuiNode(Node):
 
         self._calib_client        = self.create_client(Trigger,  '/manus_inspire/calibrate')
         self._toggle_ep_client    = self.create_client(Trigger,  '/vive_rby1/toggle_episode')
-        self._task_id_pub         = self.create_publisher(Int32, '/teleop/task_id', 10)
+        self._task_id_pub         = self.create_publisher(Int32,   '/teleop/task_id',      10)
+        self._control_mode_pub    = self.create_publisher(String,  '/teleop/control_mode', 10)
 
     def _cb_pedal(self, msg):
         state = list(msg.buttons[:3]) + [0] * max(0, 3 - len(msg.buttons))
@@ -89,6 +90,9 @@ class TeleopGuiNode(Node):
 
     def publish_task_id(self, task_id: int):
         self._task_id_pub.publish(Int32(data=task_id))
+
+    def publish_control_mode(self, mode: str):
+        self._control_mode_pub.publish(String(data=mode))
 
     def call_calibrate(self, done_cb):
         if not self._calib_client.wait_for_service(timeout_sec=1.0):
@@ -220,6 +224,20 @@ class TeleopGuiWindow(QWidget):
         ep_row.addWidget(self._ep_label)
         ep_row.addStretch()
 
+        # Control mode: Position / Impedance
+        mode_row = QHBoxLayout()
+        mode_row.addWidget(QLabel('Mode'))
+        self._radio_position  = QRadioButton('Position')
+        self._radio_impedance = QRadioButton('Impedance')
+        self._radio_position.setChecked(True)
+        self._mode_group = QButtonGroup()
+        self._mode_group.addButton(self._radio_position,  0)
+        self._mode_group.addButton(self._radio_impedance, 1)
+        self._mode_group.idClicked.connect(self._on_control_mode_changed)
+        mode_row.addWidget(self._radio_position)
+        mode_row.addWidget(self._radio_impedance)
+        mode_row.addStretch()
+
         # Start / End button
         self._rec_btn = QPushButton('▶  Start Episode')
         self._rec_btn.setFixedHeight(36)
@@ -229,6 +247,7 @@ class TeleopGuiWindow(QWidget):
         layout.addWidget(self._rec_state_label)
         layout.addLayout(task_row)
         layout.addLayout(ep_row)
+        layout.addLayout(mode_row)
         layout.addWidget(self._rec_btn)
         group.setLayout(layout)
         return group
@@ -312,6 +331,10 @@ class TeleopGuiWindow(QWidget):
 
     def _on_task_id_changed(self, index: int):
         self._node.publish_task_id(index)
+
+    def _on_control_mode_changed(self, button_id: int):
+        mode = 'impedance' if button_id == 1 else 'position'
+        self._node.publish_control_mode(mode)
 
     def _on_rec_btn(self):
         self._rec_btn.setEnabled(False)

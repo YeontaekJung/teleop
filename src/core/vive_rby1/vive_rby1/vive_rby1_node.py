@@ -48,11 +48,13 @@ from scipy.spatial.transform import Rotation as R
 
 import rclpy
 from rclpy.node import Node
+from rclpy.action import ActionClient
 from geometry_msgs.msg import PoseStamped
 from sensor_msgs.msg import Joy, JointState
 from std_msgs.msg import Int32, String
 from std_srvs.srv import Trigger
 from interbotix_xs_msgs.msg import JointGroupCommand
+from rby1_core_msgs.action import Rby1Command
 
 from scm_recording_msgs.srv import StartRecording, EndRecording, TogglePause
 from rby1_ik.rby1_ik import Rby1Ik
@@ -125,6 +127,7 @@ class ViveRby1Node(Node):
         self._pedal_engage_idx  = self.get_parameter('pedal_engage_index').value
         self._pedal_episode_idx = self.get_parameter('pedal_episode_index').value
         rate_hz                 = self.get_parameter('publish_rate').value
+        self._publish_rate      = rate_hz
 
         # Coordinate transform: tracker world frame → robot base frame
         # world +Y (forward) → robot +X,  world +X (right) → robot -Y,  world +Z (up) → robot +Z
@@ -160,22 +163,31 @@ class ViveRby1Node(Node):
         self._rec_episode = -1
         self._rec_task_id = 0
 
+        # Control mode: False = position, True = impedance
+        self._use_impedance = False
+        self._warmup_ticks  = 0   # countdown for pre-engage hold publish
+
         # Subscribers
         self.create_subscription(PoseStamped, topic_l,          self._cb_tracker_l,   10)
         self.create_subscription(PoseStamped, topic_r,          self._cb_tracker_r,   10)
         self.create_subscription(Joy,         topic_p,          self._cb_pedal,       10)
         self.create_subscription(JointState,  topic_js,         self._cb_joint_state, 10)
-        self.create_subscription(Int32,       '/teleop/task_id', self._cb_task_id,    10)
+        self.create_subscription(Int32,  '/teleop/task_id',      self._cb_task_id,       10)
+        self.create_subscription(String, '/teleop/control_mode', self._cb_control_mode,  10)
 
         # Publishers
-        self._pub_cmd       = self.create_publisher(JointGroupCommand, topic_cmd,             10)
-        self._pub_rec_state = self.create_publisher(String,            '/teleop/rec_state',   10)
-        self._pub_rec_ep    = self.create_publisher(Int32,             '/teleop/rec_episode', 10)
+        self._pub_cmd           = self.create_publisher(JointGroupCommand, topic_cmd,                          10)
+        self._pub_impedance_cmd = self.create_publisher(JointGroupCommand, '/rby1_impedance_teleop_command',   10)
+        self._pub_rec_state     = self.create_publisher(String,            '/teleop/rec_state',                10)
+        self._pub_rec_ep        = self.create_publisher(Int32,             '/teleop/rec_episode',              10)
 
         # Recording service clients
         self._cli_start_rec    = self.create_client(StartRecording, '/scm_recording/start')
         self._cli_end_rec      = self.create_client(EndRecording,   '/scm_recording/end')
         self._cli_toggle_pause = self.create_client(TogglePause,    '/scm_recording/toggle_pause')
+
+        # RB-Y1 command action client
+        self._rby1_client = ActionClient(self, Rby1Command, '/rby1_command')
 
         # Service server: GUI Start/End Episode button
         self.create_service(Trigger, '/vive_rby1/toggle_episode', self._srv_toggle_episode)
@@ -202,6 +214,10 @@ class ViveRby1Node(Node):
 
     def _cb_task_id(self, msg: Int32):
         self._rec_task_id = msg.data
+
+    def _cb_control_mode(self, msg: String):
+        self._use_impedance = (msg.data == 'impedance')
+        self.get_logger().info(f'[vive_rby1] control mode → {msg.data}')
 
     def _cb_pedal(self, _msg: Joy):
         # ---- Pedal 0: arm engage toggle ----
@@ -301,6 +317,8 @@ class ViveRby1Node(Node):
             self._rec_episode = result.episode_id
             self.get_logger().info(
                 f'[vive_rby1] READY — task {result.task_id} ep {result.episode_id}')
+            # Publish current joint state for 1 second so SDK auto-detects the topic
+            self._warmup_ticks = int(self._publish_rate)
             # Already engaged while waiting for response → auto-resume immediately
             if self._engaged:
                 self._call_toggle_pause()
@@ -314,10 +332,19 @@ class ViveRby1Node(Node):
             self._rec_state   = REC_IDLE
             self._rec_episode = -1
             self._engaged     = False
-            self.get_logger().info('[vive_rby1] Recording ENDED')
+            self.get_logger().info('[vive_rby1] Recording ENDED — moving to vla_pose2')
+            self._send_rby1_command('vla_pose2')
         else:
             self.get_logger().error(f'EndRecording failed: {result.message}')
         self._publish_rec_state()
+
+    def _send_rby1_command(self, command: str):
+        if not self._rby1_client.server_is_ready():
+            self.get_logger().warn(f'rby1_command server not ready — skipping "{command}"')
+            return
+        goal_msg = Rby1Command.Goal()
+        goal_msg.command = command
+        self._rby1_client.send_goal_async(goal_msg)
 
     def _on_toggle_pause_done(self, future):
         try:
@@ -342,6 +369,12 @@ class ViveRby1Node(Node):
     # ------------------------------------------------------------------
 
     def _timer_cb(self):
+        # Warm-up: publish current joint state so SDK auto-detects the topic
+        if self._warmup_ticks > 0:
+            self._warmup_ticks -= 1
+            self._publish_q20(self._ik.current_q20)
+            return
+
         if self._tracker_l is None or self._tracker_r is None:
             return
         if not self._engaged or self._ref_l is None or self._ee_l_0 is None:
@@ -370,10 +403,16 @@ class ViveRby1Node(Node):
             pin.SE3(target_rot_r, target_pos_r),
             self._ik_dt)
 
+        self._publish_q20(q20)
+
+    def _publish_q20(self, q20: np.ndarray):
         cmd = JointGroupCommand()
         cmd.name = 'All'
         cmd.cmd  = np.concatenate((q20, np.array([0., 0.]))).tolist()
-        self._pub_cmd.publish(cmd)
+        if self._use_impedance:
+            self._pub_impedance_cmd.publish(cmd)
+        else:
+            self._pub_cmd.publish(cmd)
 
 
 # ---------------------------------------------------------------------------
