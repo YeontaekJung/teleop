@@ -1,0 +1,9 @@
+# Request
+geometry_msgs/Pose waypoint
+---
+# Result
+int32 error_code
+string error_string
+---
+# Feedback
+string feedback
