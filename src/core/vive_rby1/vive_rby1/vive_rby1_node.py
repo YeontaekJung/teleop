@@ -326,11 +326,8 @@ class ViveRby1Node(Node):
             self._rec_episode = result.episode_id
             self.get_logger().info(
                 f'[vive_rby1] READY — task {result.task_id} ep {result.episode_id}')
-            def _after_teleop_start():
-                self._warmup_ticks = int(self._publish_rate)
-                if self._engaged:
-                    self._call_toggle_pause()
-            self._send_rby1_command('teleop_start', on_complete=_after_teleop_start)
+            self._warmup_ticks = int(self._publish_rate)
+            self._send_rby1_command('vla_pose2', then='teleop_start')
         else:
             self.get_logger().error(f'StartRecording failed: {result.message}')
         self._publish_rec_state()
