@@ -42,6 +42,7 @@ Delta computation (robot frame):
   target_rot  = (v2r_R @ dR @ v2r_R.T) @ ee_rot_at_engage
 """
 
+import threading
 import numpy as np
 import pinocchio as pin
 from scipy.spatial.transform import Rotation as R
@@ -325,12 +326,11 @@ class ViveRby1Node(Node):
             self._rec_episode = result.episode_id
             self.get_logger().info(
                 f'[vive_rby1] READY — task {result.task_id} ep {result.episode_id}')
-            self._send_rby1_command('teleop_start')
-            # Publish current joint state for 1 second so SDK auto-detects the topic
-            self._warmup_ticks = int(self._publish_rate)
-            # Already engaged while waiting for response → auto-resume immediately
-            if self._engaged:
-                self._call_toggle_pause()
+            def _after_teleop_start():
+                self._warmup_ticks = int(self._publish_rate)
+                if self._engaged:
+                    self._call_toggle_pause()
+            self._send_rby1_command('teleop_start', on_complete=_after_teleop_start)
         else:
             self.get_logger().error(f'StartRecording failed: {result.message}')
         self._publish_rec_state()
@@ -347,25 +347,35 @@ class ViveRby1Node(Node):
             self.get_logger().error(f'EndRecording failed: {result.message}')
         self._publish_rec_state()
 
-    def _send_rby1_command(self, command: str, then: str = None):
+    def _send_rby1_command(self, command: str, then: str = None, on_complete=None):
         if self._rby1_client is None:
+            if on_complete:
+                on_complete()
             return
         if not self._rby1_client.server_is_ready():
             self.get_logger().warn(f'rby1_command server not ready — skipping "{command}"')
+            if on_complete:
+                on_complete()
             return
         goal_msg = Rby1Command.Goal()
         goal_msg.command = command
         self.get_logger().info(f'[vive_rby1] sending rby1_command: {command}')
         future = self._rby1_client.send_goal_async(goal_msg)
-        if then:
-            def _on_accepted(goal_future):
-                goal_handle = goal_future.result()
-                if not goal_handle.accepted:
-                    self.get_logger().warn(f'rby1_command "{command}" rejected')
-                    return
-                goal_handle.get_result_async().add_done_callback(
-                    lambda _: self._send_rby1_command(then))
-            future.add_done_callback(_on_accepted)
+
+        def _on_accepted(goal_future):
+            goal_handle = goal_future.result()
+            if not goal_handle.accepted:
+                self.get_logger().warn(f'rby1_command "{command}" rejected')
+                if on_complete:
+                    on_complete()
+                return
+            def _on_result(_):
+                if on_complete:
+                    on_complete()
+                if then:
+                    threading.Timer(1.0, lambda: self._send_rby1_command(then)).start()
+            goal_handle.get_result_async().add_done_callback(_on_result)
+        future.add_done_callback(_on_accepted)
 
     def _on_toggle_pause_done(self, future):
         try:
