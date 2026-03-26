@@ -178,7 +178,8 @@ class ViveRby1Node(Node):
         self.create_subscription(Joy,         topic_p,          self._cb_pedal,       10)
         self.create_subscription(JointState,  topic_js,         self._cb_joint_state, 10)
         self.create_subscription(Int32,  '/teleop/task_id',      self._cb_task_id,       10)
-        self.create_subscription(String, '/teleop/control_mode', self._cb_control_mode,  10)
+        self.create_subscription(String, '/teleop/control_mode',   self._cb_control_mode,   10)
+        self.create_subscription(String, '/teleop/rby1_command',   self._cb_rby1_command,   10)
 
         # Publishers
         self._pub_cmd           = self.create_publisher(JointGroupCommand, topic_cmd,                          10)
@@ -227,6 +228,9 @@ class ViveRby1Node(Node):
     def _cb_control_mode(self, msg: String):
         self._use_impedance = (msg.data == 'impedance')
         self.get_logger().info(f'[vive_rby1] control mode → {msg.data}')
+
+    def _cb_rby1_command(self, msg: String):
+        self._send_rby1_command(msg.data)
 
     def _cb_pedal(self, _msg: Joy):
         # ---- Pedal 0: arm engage toggle ----

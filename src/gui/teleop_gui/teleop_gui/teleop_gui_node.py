@@ -67,6 +67,7 @@ class TeleopGuiNode(Node):
         self._toggle_ep_client    = self.create_client(Trigger,  '/vive_rby1/toggle_episode')
         self._task_id_pub         = self.create_publisher(Int32,   '/teleop/task_id',      10)
         self._control_mode_pub    = self.create_publisher(String,  '/teleop/control_mode', 10)
+        self._rby1_cmd_pub        = self.create_publisher(String,  '/teleop/rby1_command', 10)
 
     def _cb_pedal(self, msg):
         state = list(msg.buttons[:3]) + [0] * max(0, 3 - len(msg.buttons))
@@ -93,6 +94,9 @@ class TeleopGuiNode(Node):
 
     def publish_control_mode(self, mode: str):
         self._control_mode_pub.publish(String(data=mode))
+
+    def publish_rby1_command(self, command: str):
+        self._rby1_cmd_pub.publish(String(data=command))
 
     def call_calibrate(self, done_cb):
         if not self._calib_client.wait_for_service(timeout_sec=1.0):
@@ -159,6 +163,7 @@ class TeleopGuiWindow(QWidget):
         root.setSpacing(8)
         root.addWidget(self._build_node_panel())
         root.addWidget(self._build_pedal_panel())
+        root.addWidget(self._build_teleop_panel())
         root.addWidget(self._build_recording_panel())
         root.addWidget(self._build_calib_panel())
         self.setLayout(root)
@@ -189,6 +194,27 @@ class TeleopGuiWindow(QWidget):
             btn.setStyleSheet('background-color: #ccc; color: #444;')
             layout.addWidget(btn)
             self._pedal_btns.append(btn)
+        group.setLayout(layout)
+        return group
+
+    def _build_teleop_panel(self):
+        group  = QGroupBox('Teleop')
+        layout = QHBoxLayout()
+        layout.setSpacing(6)
+
+        buttons = [
+            ('▶  Teleop Start', 'teleop_start', '#4CAF50', 'white'),
+            ('Zero Pose',       'zero_pose',    '#5C6BC0', 'white'),
+            ('VLA Pose',        'vla_pose2',    '#5C6BC0', 'white'),
+            ('■  Teleop Stop',  'teleop_stop',  '#E53935', 'white'),
+        ]
+        for label, cmd, bg, fg in buttons:
+            btn = QPushButton(label)
+            btn.setFixedHeight(36)
+            btn.setStyleSheet(f'background-color: {bg}; color: {fg}; font-weight: bold;')
+            btn.clicked.connect(lambda checked, c=cmd: self._node.publish_rby1_command(c))
+            layout.addWidget(btn)
+
         group.setLayout(layout)
         return group
 
