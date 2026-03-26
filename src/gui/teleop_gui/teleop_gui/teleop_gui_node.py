@@ -21,7 +21,7 @@ from std_srvs.srv import Trigger
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout,
     QGroupBox, QLabel, QPushButton, QProgressBar, QGridLayout,
-    QComboBox, QRadioButton, QButtonGroup,
+    QRadioButton, QButtonGroup, QSpinBox,
 )
 from PySide6.QtCore import Qt, QTimer, Signal, QObject
 from PySide6.QtGui import QFont
@@ -208,12 +208,12 @@ class TeleopGuiWindow(QWidget):
         # task_id row
         task_row = QHBoxLayout()
         task_row.addWidget(QLabel('task_id'))
-        self._task_combo = QComboBox()
-        for i in range(4):
-            self._task_combo.addItem(str(i))
-        self._task_combo.setFixedWidth(70)
-        self._task_combo.currentIndexChanged.connect(self._on_task_id_changed)
-        task_row.addWidget(self._task_combo)
+        self._task_spin = QSpinBox()
+        self._task_spin.setMinimum(0)
+        self._task_spin.setMaximum(9999)
+        self._task_spin.setFixedWidth(70)
+        self._task_spin.valueChanged.connect(self._on_task_id_changed)
+        task_row.addWidget(self._task_spin)
         task_row.addStretch()
 
         # episode row
@@ -292,7 +292,7 @@ class TeleopGuiWindow(QWidget):
         self._rec_state_label.setStyleSheet(f'color: {color};')
 
         is_idle = (state == 'IDLE')
-        self._task_combo.setEnabled(is_idle)
+        self._task_spin.setEnabled(is_idle)
 
         if is_idle:
             self._rec_countdown_timer.stop()

@@ -325,6 +325,7 @@ class ViveRby1Node(Node):
             self._rec_episode = result.episode_id
             self.get_logger().info(
                 f'[vive_rby1] READY — task {result.task_id} ep {result.episode_id}')
+            self._send_rby1_command('teleop_start')
             # Publish current joint state for 1 second so SDK auto-detects the topic
             self._warmup_ticks = int(self._publish_rate)
             # Already engaged while waiting for response → auto-resume immediately
