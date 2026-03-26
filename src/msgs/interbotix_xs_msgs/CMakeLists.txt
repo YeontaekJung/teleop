@@ -1,50 +1,33 @@
-cmake_minimum_required(VERSION 2.8.3)
+cmake_minimum_required(VERSION 3.8)
 project(interbotix_xs_msgs)
 
-find_package(catkin REQUIRED COMPONENTS
-    message_generation
-    std_msgs
-    trajectory_msgs
-    geometry_msgs
+if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  add_compile_options(-Wall -Wextra -Wpedantic)
+endif()
+
+find_package(ament_cmake REQUIRED)
+find_package(builtin_interfaces REQUIRED)
+find_package(std_msgs REQUIRED)
+find_package(trajectory_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(rosidl_default_generators REQUIRED)
+
+rosidl_generate_interfaces(${PROJECT_NAME}
+  "msg/JointGroupCommand.msg"
+  "msg/JointSingleCommand.msg"
+  "msg/JointTrajectoryCommand.msg"
+  "msg/JointTemps.msg"
+  "msg/ArmJoy.msg"
+  "msg/HexJoy.msg"
+  "msg/LocobotJoy.msg"
+  "msg/TurretJoy.msg"
+  "srv/Reboot.srv"
+  "srv/RobotInfo.srv"
+  "srv/MotorGains.srv"
+  "srv/TorqueEnable.srv"
+  "srv/OperatingModes.srv"
+  "srv/RegisterValues.srv"
+  DEPENDENCIES builtin_interfaces std_msgs trajectory_msgs geometry_msgs
 )
 
-add_message_files(
-    FILES
-    JointGroupCommand.msg
-    JointSingleCommand.msg
-    JointTrajectoryCommand.msg
-    # xsarm_diagnostic_tool
-    JointTemps.msg
-    # xsarm_joy
-    ArmJoy.msg
-    #xshexapod_joy
-    HexJoy.msg
-    #xslocobot_joy
-    LocobotJoy.msg
-    #xsturret_joy
-    TurretJoy.msg
-)
-
-add_service_files(
-    FILES
-    Reboot.srv
-    RobotInfo.srv
-    MotorGains.srv
-    TorqueEnable.srv
-    OperatingModes.srv
-    RegisterValues.srv
-)
-
-generate_messages(
-    DEPENDENCIES
-    std_msgs
-    trajectory_msgs
-    geometry_msgs
-)
-
-catkin_package(
-    CATKIN_DEPENDS
-    message_runtime
-    std_msgs
-    trajectory_msgs
-)
+ament_package()
