@@ -173,7 +173,7 @@ class Rby1Ik:
                 velocity[idx_v] = 0.0
 
             # Clamp max velocity
-            max_teleop_dq = 1.5
+            max_teleop_dq = 3.0
             max_abs = np.max(np.abs(velocity))
             if max_abs > max_teleop_dq:
                 velocity = velocity / max_abs * max_teleop_dq
