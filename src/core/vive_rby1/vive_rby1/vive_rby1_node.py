@@ -346,7 +346,8 @@ class ViveRby1Node(Node):
             self.get_logger().info(
                 f'[vive_rby1] READY — task {result.task_id} ep {result.episode_id}')
             self._warmup_ticks = int(self._publish_rate)
-            self._send_rby1_command('vla_pose2', then='teleop_start')
+            start_cmd = 'impedance_teleop_start' if self._use_impedance else 'teleop_start'
+            self._send_rby1_command('vla_pose2', then=start_cmd)
         else:
             self.get_logger().error(f'StartRecording failed: {result.message}')
         self._publish_rec_state()

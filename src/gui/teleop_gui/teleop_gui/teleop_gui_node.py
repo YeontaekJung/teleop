@@ -355,6 +355,8 @@ class TeleopGuiWindow(QWidget):
 
         is_idle = (state == 'IDLE')
         self._task_spin.setEnabled(is_idle)
+        self._radio_position.setEnabled(is_idle)
+        self._radio_impedance.setEnabled(is_idle)
 
         if is_idle:
             self._rec_countdown_timer.stop()
