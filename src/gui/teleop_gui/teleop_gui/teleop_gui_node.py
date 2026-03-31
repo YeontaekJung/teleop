@@ -58,9 +58,11 @@ class TeleopGuiNode(Node):
         self._rec_state_cbs   = []
         self._rec_episode_cbs = []
 
-        self.create_subscription(Joy,    '/teleop/pedal',       self._cb_pedal,       10)
-        self.create_subscription(String, '/teleop/rec_state',   self._cb_rec_state,   10)
-        self.create_subscription(Int32,  '/teleop/rec_episode', self._cb_rec_episode, 10)
+        self.create_subscription(Joy,    '/teleop/pedal',          self._cb_pedal,          10)
+        self.create_subscription(String, '/teleop/rec_state',      self._cb_rec_state,      10)
+        self.create_subscription(Int32,  '/teleop/rec_episode',    self._cb_rec_episode,    10)
+        self.create_subscription(String, '/teleop/tracker_status', self._cb_tracker_status, 10)
+        self._tracker_status_cbs = []
         self.create_timer(1.0, self._poll_nodes)
 
         self._calib_client        = self.create_client(Trigger,  '/manus_inspire/calibrate')
@@ -82,6 +84,13 @@ class TeleopGuiNode(Node):
     def _cb_rec_episode(self, msg: Int32):
         for cb in self._rec_episode_cbs:
             cb(msg.data)
+
+    def _cb_tracker_status(self, msg: String):
+        parts = msg.data.split()
+        sl = parts[0].split(':')[1]
+        sr = parts[1].split(':')[1]
+        for cb in self._tracker_status_cbs:
+            cb(sl, sr)
 
     def _poll_nodes(self):
         names  = {n for n, _ in self.get_node_names_and_namespaces()}
@@ -120,13 +129,14 @@ class TeleopGuiNode(Node):
 # ---------------------------------------------------------------------------
 
 class Signals(QObject):
-    pedal_updated       = Signal(list)
-    node_status_updated = Signal(dict)
-    calib_status        = Signal(str)
-    calib_started       = Signal()
-    calib_failed        = Signal(str)
-    rec_state_changed   = Signal(str)
-    rec_episode_changed = Signal(int)
+    pedal_updated          = Signal(list)
+    node_status_updated    = Signal(dict)
+    calib_status           = Signal(str)
+    calib_started          = Signal()
+    calib_failed           = Signal(str)
+    rec_state_changed      = Signal(str)
+    rec_episode_changed    = Signal(int)
+    tracker_status_changed = Signal(str, str)
 
 
 # ---------------------------------------------------------------------------
@@ -148,6 +158,7 @@ class TeleopGuiWindow(QWidget):
         signals.calib_failed.connect(self._on_calib_failed)
         signals.rec_state_changed.connect(self._on_rec_state)
         signals.rec_episode_changed.connect(self._on_rec_episode)
+        signals.tracker_status_changed.connect(self._on_tracker_status)
 
         self._build_ui()
 
@@ -180,6 +191,22 @@ class TeleopGuiWindow(QWidget):
             grid.addWidget(dot, i, 0, Qt.AlignCenter)
             grid.addWidget(QLabel(f'{pkg} / {node}'), i, 1)
             self._node_dots[node] = dot
+
+        # Tracker status row
+        n = len(NODES_TO_WATCH)
+        grid.addWidget(QLabel('Tracker'), n, 1)
+        tracker_dots = QHBoxLayout()
+        self._tracker_dot_l = QLabel('● L')
+        self._tracker_dot_r = QLabel('● R')
+        for dot in (self._tracker_dot_l, self._tracker_dot_r):
+            dot.setFont(QFont('Monospace', 11))
+            dot.setStyleSheet('color: #888;')
+            tracker_dots.addWidget(dot)
+        tracker_dots.addStretch()
+        tracker_widget = QWidget()
+        tracker_widget.setLayout(tracker_dots)
+        grid.addWidget(tracker_widget, n, 1)
+
         group.setLayout(grid)
         return group
 
@@ -310,6 +337,13 @@ class TeleopGuiWindow(QWidget):
                 color = '#A6D256' if alive else '#ED325A'
                 self._node_dots[node].setStyleSheet(f'color: {color};')
 
+    def _on_tracker_status(self, sl: str, sr: str):
+        _colors = {'OK': '#4CAF50', 'JITTER': '#F0C040', 'LOST': '#E0302A'}
+        self._tracker_dot_l.setText(f'● L')
+        self._tracker_dot_r.setText(f'● R')
+        self._tracker_dot_l.setStyleSheet(f'color: {_colors.get(sl, "#888")};')
+        self._tracker_dot_r.setStyleSheet(f'color: {_colors.get(sr, "#888")};')
+
     def _on_rec_state(self, state: str):
         prev_state = self._rec_state
         self._rec_state = state
@@ -432,10 +466,11 @@ def main(args=None):
     ros_node = TeleopGuiNode()
     signals  = Signals()
 
-    ros_node._pedal_cbs.append(       lambda s: signals.pedal_updated.emit(s))
-    ros_node._node_status_cbs.append( lambda s: signals.node_status_updated.emit(s))
-    ros_node._rec_state_cbs.append(   lambda s: signals.rec_state_changed.emit(s))
-    ros_node._rec_episode_cbs.append( lambda e: signals.rec_episode_changed.emit(e))
+    ros_node._pedal_cbs.append(          lambda s:    signals.pedal_updated.emit(s))
+    ros_node._node_status_cbs.append(    lambda s:    signals.node_status_updated.emit(s))
+    ros_node._rec_state_cbs.append(      lambda s:    signals.rec_state_changed.emit(s))
+    ros_node._rec_episode_cbs.append(    lambda e:    signals.rec_episode_changed.emit(e))
+    ros_node._tracker_status_cbs.append( lambda l, r: signals.tracker_status_changed.emit(l, r))
 
     spin_thread = threading.Thread(
         target=rclpy.spin, args=(ros_node,), daemon=True)

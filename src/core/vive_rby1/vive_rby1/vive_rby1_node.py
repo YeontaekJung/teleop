@@ -43,6 +43,8 @@ Delta computation (robot frame):
 """
 
 import threading
+import time
+from collections import deque
 import numpy as np
 import pinocchio as pin
 from scipy.spatial.transform import Rotation as R
@@ -152,6 +154,12 @@ class ViveRby1Node(Node):
         self._tracker_r: PoseStamped | None = None
         self._joint_state: JointState | None = None
 
+        # Tracker status monitoring
+        self._tracker_buf_l:   deque = deque(maxlen=20)
+        self._tracker_buf_r:   deque = deque(maxlen=20)
+        self._tracker_stamp_l: float = 0.0
+        self._tracker_stamp_r: float = 0.0
+
         # Pedal edge-detect state
         self._pedal_engage_prev  = False
         self._pedal_episode_prev = False
@@ -186,6 +194,7 @@ class ViveRby1Node(Node):
         self._pub_impedance_cmd = self.create_publisher(JointGroupCommand, '/rby1_impedance_teleop_command',   10)
         self._pub_rec_state     = self.create_publisher(String,            '/teleop/rec_state',                10)
         self._pub_rec_ep        = self.create_publisher(Int32,             '/teleop/rec_episode',              10)
+        self._pub_tracker_status = self.create_publisher(String,           '/teleop/tracker_status',           10)
 
         # Recording service clients
         self._cli_start_rec    = self.create_client(StartRecording, '/scm_recording/start')
@@ -213,9 +222,15 @@ class ViveRby1Node(Node):
 
     def _cb_tracker_l(self, msg: PoseStamped):
         self._tracker_l = msg
+        self._tracker_stamp_l = time.monotonic()
+        p = msg.pose.position
+        self._tracker_buf_l.append([p.x, p.y, p.z])
 
     def _cb_tracker_r(self, msg: PoseStamped):
         self._tracker_r = msg
+        self._tracker_stamp_r = time.monotonic()
+        p = msg.pose.position
+        self._tracker_buf_r.append([p.x, p.y, p.z])
 
     def _cb_joint_state(self, msg: JointState):
         self._joint_state = msg
@@ -396,11 +411,22 @@ class ViveRby1Node(Node):
         self._pub_rec_state.publish(String(data=self._rec_state))
         self._pub_rec_ep.publish(Int32(data=self._rec_episode))
 
+    def _tracker_status(self, buf: deque, stamp: float) -> str:
+        if time.monotonic() - stamp > 0.5:
+            return 'LOST'
+        if len(buf) >= 10 and np.std(np.array(buf), axis=0).max() > 0.003:
+            return 'JITTER'
+        return 'OK'
+
     # ------------------------------------------------------------------
     # Main timer: IK and publish
     # ------------------------------------------------------------------
 
     def _timer_cb(self):
+        sl = self._tracker_status(self._tracker_buf_l, self._tracker_stamp_l)
+        sr = self._tracker_status(self._tracker_buf_r, self._tracker_stamp_r)
+        self._pub_tracker_status.publish(String(data=f'L:{sl} R:{sr}'))
+
         # Warm-up: publish current joint state so SDK auto-detects the topic
         if self._warmup_ticks > 0:
             self._warmup_ticks -= 1
