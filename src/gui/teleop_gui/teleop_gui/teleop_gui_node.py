@@ -194,18 +194,20 @@ class TeleopGuiWindow(QWidget):
 
         # Tracker status row
         n = len(NODES_TO_WATCH)
-        grid.addWidget(QLabel('Tracker'), n, 1)
-        tracker_dots = QHBoxLayout()
         self._tracker_dot_l = QLabel('● L')
         self._tracker_dot_r = QLabel('● R')
         for dot in (self._tracker_dot_l, self._tracker_dot_r):
             dot.setFont(QFont('Monospace', 11))
             dot.setStyleSheet('color: #888;')
-            tracker_dots.addWidget(dot)
+        tracker_dots = QHBoxLayout()
+        tracker_dots.setSpacing(8)
+        tracker_dots.addWidget(self._tracker_dot_l)
+        tracker_dots.addWidget(self._tracker_dot_r)
         tracker_dots.addStretch()
         tracker_widget = QWidget()
         tracker_widget.setLayout(tracker_dots)
-        grid.addWidget(tracker_widget, n, 1)
+        grid.addWidget(QLabel('Tracker'), n, 1)
+        grid.addWidget(tracker_widget, n, 2)
 
         group.setLayout(grid)
         return group
