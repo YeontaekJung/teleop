@@ -245,7 +245,10 @@ class ViveRby1Node(Node):
         self.get_logger().info(f'[vive_rby1] control mode → {msg.data}')
 
     def _cb_rby1_command(self, msg: String):
-        self._send_rby1_command(msg.data)
+        cmd = msg.data
+        if cmd == 'teleop_start' and self._use_impedance:
+            cmd = 'impedance_teleop_start'
+        self._send_rby1_command(cmd)
 
     def _cb_pedal(self, _msg: Joy):
         # ---- Pedal 0: arm engage toggle ----
