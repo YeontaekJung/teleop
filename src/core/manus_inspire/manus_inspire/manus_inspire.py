@@ -74,29 +74,42 @@ class ManusInspire(Node):
     def _start_calib(self):
         self._calib_mode = True
         self._calib_phase = 0
+        self._reset_calib_samples()
+        self._calib_start = self.get_clock().now().nanoseconds * 1e-9
+        self.get_logger().warn("=== CALIBRATION 1/4: Open hands fully and hold... ===")
+
+    def _reset_calib_samples(self):
         self._calib_samples = {
             hand: {f: [] for f in FINGERS}
             for hand in ('left', 'right')
         }
-        self._calib_start = self.get_clock().now().nanoseconds * 1e-9
-        self.get_logger().warn("=== CALIBRATION 1/2: Open hands fully and hold... ===")
 
     def _srv_calibrate(self, req, resp):
         self._start_calib()
         resp.success = True
-        resp.message = "Calibration started — open hands for 4s, then close fists for 4s."
+        resp.message = (
+            "Calibration started — "
+            "1) open hands 4s, 2) close fists 4s, "
+            "3) spread thumbs out 4s, 4) fold thumbs to palm 4s."
+        )
         return resp
 
     def _collect_sample(self, hand, ergo):
         s = self._calib_samples[hand]
-        for fname, keys in ERGO_KEYS.items():
-            val = self.weighted_flex(
-                ergo.get(keys[0], 0.0),
-                ergo.get(keys[1], 0.0),
-                ergo.get(keys[2], 0.0),
-            )
-            s[fname].append(val)
-        s['spread'].append(ergo.get('ThumbMCPSpread', 0.0))
+        # Phases 0-1: collect all fingers (excluding thumb — calibrated separately)
+        if self._calib_phase < 2:
+            for fname in ('index', 'middle', 'ring', 'pinky'):
+                keys = ERGO_KEYS[fname]
+                val = self.weighted_flex(
+                    ergo.get(keys[0], 0.0),
+                    ergo.get(keys[1], 0.0),
+                    ergo.get(keys[2], 0.0),
+                )
+                s[fname].append(val)
+        # Phases 2-3: collect thumb only
+        else:
+            s['thumb'].append(ergo.get('ThumbMCPStretch', 0.0))
+            s['spread'].append(ergo.get('ThumbMCPSpread', 0.0))
 
     def _advance_calib(self):
         now = self.get_clock().now().nanoseconds * 1e-9
@@ -104,28 +117,50 @@ class ManusInspire(Node):
             return
 
         if self._calib_phase == 0:
-            # open-hand → min
+            # open-hand → min for fingers
             for hand in ('left', 'right'):
-                for f in FINGERS:
+                for f in ('index', 'middle', 'ring', 'pinky'):
                     s = self._calib_samples[hand][f]
                     if s:
                         self._calib[hand][f]['min'] = float(min(s))
-            # reset for phase 2
             self._calib_phase = 1
-            self._calib_samples = {
-                hand: {f: [] for f in FINGERS}
-                for hand in ('left', 'right')
-            }
+            self._reset_calib_samples()
             self._calib_start = now
-            self.get_logger().warn("=== CALIBRATION 2/2: Close fists fully and hold... ===")
+            self.get_logger().warn("=== CALIBRATION 2/4: Close fists (thumbs out) and hold... ===")
 
         elif self._calib_phase == 1:
-            # fist → max
+            # fist → max for fingers
             for hand in ('left', 'right'):
-                for f in FINGERS:
+                for f in ('index', 'middle', 'ring', 'pinky'):
                     s = self._calib_samples[hand][f]
                     if s:
                         self._calib[hand][f]['max'] = float(max(s))
+            self._calib_phase = 2
+            self._reset_calib_samples()
+            self._calib_start = now
+            self.get_logger().warn("=== CALIBRATION 3/4: Spread thumbs fully outward and hold... ===")
+
+        elif self._calib_phase == 2:
+            # thumb spread out → MCPStretch max + spread min
+            for hand in ('left', 'right'):
+                s = self._calib_samples[hand]
+                if s['thumb']:
+                    self._calib[hand]['thumb']['max'] = float(max(s['thumb']))
+                if s['spread']:
+                    self._calib[hand]['spread']['min'] = float(min(s['spread']))
+            self._calib_phase = 3
+            self._reset_calib_samples()
+            self._calib_start = now
+            self.get_logger().warn("=== CALIBRATION 4/4: Fold thumbs into palm and hold... ===")
+
+        elif self._calib_phase == 3:
+            # thumb folded → MCPStretch min + spread max
+            for hand in ('left', 'right'):
+                s = self._calib_samples[hand]
+                if s['thumb']:
+                    self._calib[hand]['thumb']['min'] = float(min(s['thumb']))
+                if s['spread']:
+                    self._calib[hand]['spread']['max'] = float(max(s['spread']))
             self._calib_mode = False
             self._save_calib()
             self.get_logger().info("=== CALIBRATION COMPLETE ===")
