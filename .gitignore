@@ -12,3 +12,7 @@
 /build/
 /install/
 /log/
+
+# Local planning & Claude instructions (not for repo)
+/CLAUDE.md
+/plan.md
