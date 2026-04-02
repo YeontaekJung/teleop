@@ -84,8 +84,8 @@ class Rby1Ik:
         )
 
         # Tasks
-        self._task_left  = FrameTask('tracker_left',  position_cost=50.0, orientation_cost=10.0)
-        self._task_right = FrameTask('tracker_right', position_cost=50.0, orientation_cost=10.0)
+        self._task_left  = FrameTask('tracker_left',  position_cost=50.0, orientation_cost=0.0)
+        self._task_right = FrameTask('tracker_right', position_cost=50.0, orientation_cost=0.0)
         self._task_body  = FrameTask('link_torso_5',  position_cost=500.0, orientation_cost=20.0)
         self._task_posture = PostureTask(cost=1e-3)
 

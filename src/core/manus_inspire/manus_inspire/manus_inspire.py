@@ -25,7 +25,7 @@ DEFAULT_CALIB = {
     'middle': {'min': 0.0, 'max': 75.0},
     'ring':   {'min': 0.0, 'max': 75.0},
     'pinky':  {'min': 0.0, 'max': 65.0},
-    'thumb':  {'min': 0.0, 'max': 35.0},
+    'thumb':  {'min': 0.0, 'max': 55.0},
     'spread': {'min': -30.0, 'max': 30.0},
 }
 
@@ -199,13 +199,13 @@ class ManusInspire(Node):
         middle_flex = self.weighted_flex(ergo.get("MiddleMCPStretch", 0.0), ergo.get("MiddlePIPStretch", 0.0), ergo.get("MiddleDIPStretch", 0.0))
         ring_flex   = self.weighted_flex(ergo.get("RingMCPStretch",   0.0), ergo.get("RingPIPStretch",   0.0), ergo.get("RingDIPStretch",   0.0))
         pinky_flex  = self.weighted_flex(ergo.get("PinkyMCPStretch",  0.0), ergo.get("PinkyPIPStretch",  0.0), ergo.get("PinkyDIPStretch",  0.0))
-        thumb_flex  = self.weighted_flex(ergo.get("ThumbMCPStretch",  0.0), ergo.get("ThumbPIPStretch",  0.0), ergo.get("ThumbDIPStretch",  0.0))
+        thumb_flex  = ergo.get("ThumbMCPStretch", 0.0)  # PIP/DIP contaminated by finger motion
 
         index  = self.flex_to_inspire(index_flex,  c['index']['min'],  c['index']['max'],  invert=True)
         middle = self.flex_to_inspire(middle_flex, c['middle']['min'], c['middle']['max'], invert=True)
         ring   = self.flex_to_inspire(ring_flex,   c['ring']['min'],   c['ring']['max'],   invert=True)
         pinky  = self.flex_to_inspire(pinky_flex,  c['pinky']['min'],  c['pinky']['max'],  invert=True)
-        thumb  = self.flex_to_inspire(thumb_flex,  c['thumb']['min'],  c['thumb']['max'],  invert=False)
+        thumb  = self.flex_to_inspire(thumb_flex,  c['thumb']['min'],  c['thumb']['max'],  invert=not is_right)
 
         spread_raw  = ergo.get("ThumbMCPSpread", 0.0)
         spread_rng  = max(c['spread']['max'] - c['spread']['min'], 1.0)
