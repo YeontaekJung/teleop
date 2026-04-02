@@ -435,10 +435,17 @@ class TeleopGuiWindow(QWidget):
         self._sig.calib_status.emit(msg)
         self._calib_btn.setEnabled(True)
 
+    _CALIB_PHASE_MSGS = {
+        1: 'Phase 1/4: Open hands fully...',
+        2: 'Phase 2/4: Close fists (thumbs out)...',
+        3: 'Phase 3/4: Spread thumbs fully outward...',
+        4: 'Phase 4/4: Fold thumbs into palm...',
+    }
+
     def _start_calib_progress(self):
         self._calib_elapsed = 0.0
         self._calib_phase   = 1
-        self._sig.calib_status.emit('Phase 1/2: Open hands fully...')
+        self._sig.calib_status.emit(self._CALIB_PHASE_MSGS[1])
         self._calib_tick_timer = QTimer()
         self._calib_tick_timer.timeout.connect(self._tick_calib)
         self._calib_tick_timer.start(100)
@@ -446,14 +453,14 @@ class TeleopGuiWindow(QWidget):
     def _tick_calib(self):
         self._calib_elapsed += 0.1
         done_phases = (self._calib_phase - 1) * CALIB_DURATION
-        pct = int((done_phases + self._calib_elapsed) / (CALIB_DURATION * 2) * 100)
+        pct = int((done_phases + self._calib_elapsed) / (CALIB_DURATION * 4) * 100)
         self._calib_bar.setValue(min(pct, 100))
 
         if self._calib_elapsed >= CALIB_DURATION:
             self._calib_elapsed = 0.0
-            if self._calib_phase == 1:
-                self._calib_phase = 2
-                self._sig.calib_status.emit('Phase 2/2: Close fists fully...')
+            if self._calib_phase < 4:
+                self._calib_phase += 1
+                self._sig.calib_status.emit(self._CALIB_PHASE_MSGS[self._calib_phase])
             else:
                 self._calib_tick_timer.stop()
                 self._calib_bar.setValue(100)
