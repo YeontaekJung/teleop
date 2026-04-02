@@ -216,7 +216,7 @@ class TeleopGuiWindow(QWidget):
         group  = QGroupBox('Pedal')
         layout = QHBoxLayout()
         self._pedal_btns = []
-        for label in ['Engage', '—', 'Episode']:
+        for label in ['Resume/Pause', '—', '● Rec']:
             btn = QPushButton(label)
             btn.setEnabled(False)
             btn.setFixedHeight(36)
