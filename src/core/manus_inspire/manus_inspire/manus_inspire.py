@@ -248,7 +248,7 @@ class ManusInspire(Node):
         middle = self.flex_to_inspire(middle_flex, c['middle']['min'], c['middle']['max'], invert=True)
         ring   = self.flex_to_inspire(ring_flex,   c['ring']['min'],   c['ring']['max'],   invert=True)
         pinky  = self.flex_to_inspire(pinky_flex,  c['pinky']['min'],  c['pinky']['max'],  invert=True)
-        thumb  = self.flex_to_inspire(thumb_flex,  c['thumb']['min'],  c['thumb']['max'],  invert=not is_right)
+        thumb  = self.flex_to_inspire(thumb_flex,  c['thumb']['min'],  c['thumb']['max'],  invert=False)
 
         spread_raw  = ergo.get("ThumbMCPSpread", 0.0)
         spread_rng  = max(c['spread']['max'] - c['spread']['min'], 1.0)
