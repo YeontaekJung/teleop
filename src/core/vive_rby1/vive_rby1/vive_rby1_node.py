@@ -179,6 +179,7 @@ class ViveRby1Node(Node):
         # Control mode: False = position, True = impedance
         self._use_impedance = False
         self._warmup_ticks  = 0   # countdown for pre-engage hold publish
+        self._teleop_active = False  # True once teleop_start / impedance_teleop_start is sent
 
         # Subscribers
         self.create_subscription(PoseStamped, topic_l,          self._cb_tracker_l,   10)
@@ -251,11 +252,13 @@ class ViveRby1Node(Node):
         self._send_rby1_command(cmd)
 
     def _cb_pedal(self, _msg: Joy):
-        # ---- Pedal 0: arm engage toggle ----
+        # ---- Pedal 0: arm engage toggle (only when teleop is active) ----
         if self._pedal_engage_idx < len(_msg.buttons):
             pressed = bool(_msg.buttons[self._pedal_engage_idx])
             if pressed and not self._pedal_engage_prev:
-                if self._engaged:
+                if not self._teleop_active:
+                    self.get_logger().warn('Cannot engage — teleop not active')
+                elif self._engaged:
                     self._on_disengage()
                 elif self._tracker_l is not None and self._tracker_r is not None:
                     self._on_engage()
@@ -377,6 +380,12 @@ class ViveRby1Node(Node):
             if on_complete:
                 on_complete()
             return
+        if command in ('teleop_start', 'impedance_teleop_start'):
+            self._teleop_active = True
+        elif command == 'teleop_stop':
+            self._teleop_active = False
+            self._engaged = False
+
         goal_msg = Rby1Command.Goal()
         goal_msg.command = command
         self.get_logger().info(f'[vive_rby1] sending rby1_command: {command}')
