@@ -8,15 +8,17 @@ Designed to be extensible — additional robot platforms and input devices can b
 
 ```
 Input              Core                      Output
-──────────────────────────────────────────────────────────────
-manus_ros2      →  manus_inspire          →  inspire_driver       (Inspire Hand)
-vive_ros2       →  vive_rby1 (+ rby1_ik) →  /rby1_teleop_command (RB-Y1)
-pedal_ros2      →  clutch / recording     →  /scm_recording/start|end|toggle_pause (recording core)
+──────────────────────────────────────────────────────────────────────
+manus_ros2      →  manus_inspire          →  inspire_driver            (Inspire Hand)
+vive_ros2       →  vive_rby1 (+ rby1_ik) →  /rby1_teleop_command      (RB-Y1, position mode)
+                                          →  /rby1_impedance_teleop_command  (RB-Y1, impedance mode)
+pedal_ros2      →  clutch / recording     →  /scm_recording/start|end|toggle_pause
+rby1_core_msgs  →  /rby1_command          →  rby1_core_node            (pose commands)
 ```
 
-All msg/srv definitions are under `src/msgs/`.
+All msg/srv/action definitions are under `src/msgs/`.
 
-A GUI node (`teleop_gui`) provides live system status and calibration control.
+A GUI node (`teleop_gui`) provides live system status, teleop controls, tracker status, and calibration.
 
 ## Hardware Requirements (Current Setup)
 
@@ -34,7 +36,8 @@ A GUI node (`teleop_gui`) provides live system status and calibration control.
 - Ubuntu 22.04
 - ROS2 Humble (`ros-humble-desktop`)
 - SteamVR running with Vive Trackers paired before launching
-- ManusSDK (see Installation step 1)
+- ManusSDK (see Installation step 2)
+- `rby1_core` package installed (provides `Rby1ControllerJointTeleop`, `Rby1ControllerJointImpedanceTeleop`, etc.)
 
 ## Installation
 
@@ -54,8 +57,8 @@ Copy the ManusSDK folder to the repo root:
 └── ManusSDK/
     ├── include/
     │   ├── ManusSDK.h
-    │   ├── ManusSDKTypes.h
-    │   └── ManusSDKTypeInitializers.h
+    │   ├── ManusSDKTypeInitializers.h
+    │   └── ManusSDKTypes.h
     └── lib/
         ├── libManusSDK.so
         └── libManusSDK_Integrated.so
@@ -97,6 +100,9 @@ colcon build
 source install/setup.bash
 ```
 
+> **Note:** `interbotix_xs_msgs` is included in the repo for reference but excluded from build
+> (`COLCON_IGNORE` present) — it is assumed to be installed system-wide.
+
 ## Configuration
 
 ### Vive Tracker serial numbers
@@ -125,6 +131,18 @@ ros2 run vive_rby1 vive_rby1_node --ros-args \
   -p srdf_path:=/path/to/rby1.srdf
 ```
 
+### IK / Teleop tuning parameters
+
+Adjustable in `src/launch/teleop_bringup/launch/teleop.launch.py`:
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `publish_rate` | 50.0 Hz | IK command publish rate |
+| `ik_dt` | 0.1 s | Differential IK time step (larger = faster tracking, more overshoot) |
+| `pos_scale` | 1.0 | Tracker-to-robot position scale (1.0 = 1:1) |
+
+`max_teleop_dq` (joint velocity clamp, rad/s) is set in `src/core/rby1_ik/rby1_ik/rby1_ik.py`.
+
 ## Quick Start
 
 Start SteamVR and pair all Vive devices, then:
@@ -136,40 +154,49 @@ ros2 launch teleop_bringup teleop.launch.py
 
 This launches all nodes: pedal driver, Vive tracker, Manus publisher, arm IK bridge, hand mapper, and GUI.
 
-The GUI shows live node status, pedal state, recording state, control mode selector, and the calibration panel.
+The GUI shows live node status, pedal state, tracker status (OK / JITTER / LOST), recording state, control mode selector, teleop buttons, and the calibration panel.
 
 ## Usage
 
 ### Pedal Mapping
 
-| Pedal | Mode | Function |
-|-------|------|----------|
-| A (left) | Toggle | Arm engage / disengage |
-| B (center) | — | Spare |
-| C (right) | Toggle | Start / End recording episode |
+| Pedal | Function |
+|-------|----------|
+| A (left) | Toggle arm engage / disengage |
+| B (center) | Spare |
+| C (right) | Toggle Start / End recording episode |
 
-### Teleoperation
+### Control Modes
 
-1. Launch the full system with the command above.
-2. Confirm all nodes show green in the GUI.
-3. **Press pedal A** to engage arm tracking (toggle).
-   - Engaged: tracker poses mapped to robot joint commands in real time.
-   - Disengaged: robot holds last position.
-   - On re-engage: reference pose re-captured — no position jump.
-   - Vive trackers must be detected before engage is accepted.
+Select in the GUI before starting a session (locked during active recording):
 
-### Recording
+| Mode | Topic | Description |
+|------|-------|-------------|
+| Position | `/rby1_teleop_command` | Joint position tracking via differential IK |
+| Impedance | `/rby1_impedance_teleop_command` | Impedance control via `rby1_core` |
 
-Requires the `scm_recording` core to be running and `/scm_recording/*` services to be available.
+### Teleoperation (without recording)
 
-1. Select `task_id` (0–3) in the GUI Recording panel.
-2. Select control mode: **Position** or **Impedance** (affects which command topic is used).
-3. Click **▶ Start Episode** (or press pedal C) — system enters READY state.
-4. **Press pedal A** to engage arm → recording starts automatically (RECORDING).
-5. **Press pedal A** to disengage → recording pauses automatically (PAUSED).
+Use the GUI **Teleop** panel buttons directly:
+
+| Button | Action |
+|--------|--------|
+| ▶ Teleop Start | Start streaming joint commands (respects control mode) |
+| Zero Pose | Move robot to zero configuration |
+| VLA Pose | Move robot to VLA home pose |
+| ■ Teleop Stop | Stop streaming |
+
+### Recording Workflow
+
+Requires `scm_recording` core (`/scm_recording/*` services) and `rby1_core_node` (`/rby1_command` action server) to be running.
+
+1. Select `task_id` in the GUI Recording panel.
+2. Select control mode: **Position** or **Impedance**.
+3. Click **▶ Start Episode** (or press pedal C) — system sends `vla_pose2` then starts teleop automatically.
+4. **Press pedal A** to engage arm → recording starts (RECORDING).
+5. **Press pedal A** to disengage → recording pauses (PAUSED).
 6. Repeat steps 4–5 to collect data across multiple engage cycles.
-7. Click **■ End Episode** (or press pedal C) when in PAUSED state — episode saved.
-8. Robot automatically moves to `vla_pose2` (home pose) after episode ends.
+7. Click **■ End Episode** (or press pedal C) when PAUSED — robot stops teleop, moves to `vla_pose2`, episode saved.
 
 Recording states:
 
@@ -180,20 +207,36 @@ Recording states:
 | RECORDING | red | Arm engaged, data being recorded |
 | PAUSED | orange | Arm disengaged, session still active |
 
+### Tracker Status
+
+The GUI Node Status panel shows live tracker health:
+
+| Status | Color | Meaning |
+|--------|-------|---------|
+| OK | green | Tracker data arriving normally |
+| JITTER | yellow | High position variance detected (> 3mm σ over last 20 samples) |
+| LOST | red | No data received for > 0.5s |
+
 ### Manus Hand Calibration
 
 Finger sensor ranges are calibrated per session and saved to `~/.ros/manus_inspire_calib.yaml`.
 
 - **First launch:** calibration starts automatically if no saved file is found.
-- **Recalibrate:** click **Recalibrate** in the GUI, or call the service directly:
+- **Recalibrate:** click **Recalibrate** in the GUI, or call the service:
   ```bash
   ros2 service call /manus_inspire/calibrate std_srvs/srv/Trigger
   ```
 
-Calibration procedure (8 seconds total):
-1. **Phase 1 (4 s):** Fully open both hands and hold.
-2. **Phase 2 (4 s):** Make tight fists and hold.
-3. Calibration saves automatically.
+Calibration procedure (16 seconds total, 4 seconds per phase):
+
+| Phase | Pose | Calibrates |
+|-------|------|-----------|
+| 1 | Open hands fully | Finger min + thumb spread min |
+| 2 | Thumbs up (fist, thumb pointing up) | Finger max + thumb MCPStretch max |
+| 3 | Press thumb to side of index finger | Thumb spread max |
+| 4 | Open fingers, bend thumb only | Thumb MCPStretch min |
+
+> Delete `~/.ros/manus_inspire_calib.yaml` to force recalibration on next launch.
 
 ## Individual Nodes (Advanced)
 
@@ -209,9 +252,6 @@ ros2 run manus_ros2 manus_data_publisher
 ros2 run vive_rby1 vive_rby1_node
 ros2 run manus_inspire manus_inspire_node
 
-# Output
-ros2 run inspire_driver inspire_driver_node
-
 # GUI
 ros2 run teleop_gui teleop_gui_node
 ```
@@ -225,11 +265,12 @@ ros2 run teleop_gui teleop_gui_node
 | `vive_ros2` | input | Vive Tracker 3.0 → `/teleop/tracker/left\|right` |
 | `manus_ros2_msgs` | msgs | Manus glove message types |
 | `inspire_hand_msgs` | msgs | Inspire hand message types |
-| `scm_recording_msgs` | msgs | Recording core service definitions (StartRecording, EndRecording, GetStatus, TogglePause) |
-| `manus_inspire` | core | Manus glove data → Inspire hand commands |
+| `scm_recording_msgs` | msgs | Recording core service definitions |
+| `rby1_core_msgs` | msgs | RB-Y1 core action definitions (`Rby1Command`) |
+| `manus_inspire` | core | Manus glove data → Inspire hand commands + 4-phase calibration |
 | `rby1_ik` | core | Differential IK solver (pink + pinocchio) |
-| `vive_rby1` | core | Tracker delta → RB-Y1 joint commands |
-| `teleop_gui` | gui | PySide6 status/calibration GUI (node status, pedal, recording, control mode) |
+| `vive_rby1` | core | Tracker delta → RB-Y1 joint commands, recording state machine |
+| `teleop_gui` | gui | PySide6 GUI (node status, tracker status, teleop panel, recording, calibration) |
 | `teleop_bringup` | launch | Launch file for full system |
 | `inspire_driver` | output | Inspire hand hardware driver |
 
@@ -243,6 +284,10 @@ ros2 run teleop_gui teleop_gui_node
 - Ensure SteamVR is running and trackers show green before launching.
 - Check serial numbers match the parameters in `vive_tracker_node.py`.
 
+**Tracker shows LOST in GUI**
+- Check SteamVR — tracker may have lost line-of-sight to base station.
+- Tracker stamp timeout is 0.5s.
+
 **Build fails with empy error**
 - `pip3 install empy==3.3.4` — colcon requires 3.x, not 4.x.
 
@@ -251,3 +296,12 @@ ros2 run teleop_gui teleop_gui_node
 
 **ManusSDK not found**
 - Confirm `ManusSDK/include/ManusSDK.h` and `ManusSDK/lib/libManusSDK.so` exist at the repo root.
+
+**`/rby1_command` action not available**
+- `rby1_core_node` must be running separately (not part of this repo).
+- Without it, VLA pose commands are skipped but teleop still works.
+
+**Robot joint trembling**
+- Reduce `max_teleop_dq` in `rby1_ik.py` (currently 1.5 rad/s).
+- Reduce `ik_dt` in launch file (currently 0.1s).
+- Both together determine max joint velocity: `max_teleop_dq × ik_dt = max Δq per step`.
