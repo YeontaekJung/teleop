@@ -437,9 +437,9 @@ class TeleopGuiWindow(QWidget):
 
     _CALIB_PHASE_MSGS = {
         1: 'Phase 1/4: Open hands fully...',
-        2: 'Phase 2/4: Close fists (thumbs out)...',
-        3: 'Phase 3/4: Spread thumbs fully outward...',
-        4: 'Phase 4/4: Fold thumbs into palm...',
+        2: 'Phase 2/4: Thumbs up (fist, thumb pointing up)...',
+        3: 'Phase 3/4: Press thumb to side of index finger...',
+        4: 'Phase 4/4: Open fingers, bend thumb only...',
     }
 
     def _start_calib_progress(self):
