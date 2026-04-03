@@ -10,7 +10,7 @@ Designed to be extensible — additional robot platforms and input devices can b
 Input              Core                      Output
 ──────────────────────────────────────────────────────────────────────
 manus_ros2      →  manus_inspire          →  inspire_driver            (Inspire Hand)
-vive_ros2       →  vive_rby1 (+ rby1_ik) →  /rby1_teleop_command      (RB-Y1, position mode)
+vive_ros2       →  vive_rby1 (+ rby1_ik)  →  /rby1_teleop_command      (RB-Y1, position mode)
                                           →  /rby1_impedance_teleop_command  (RB-Y1, impedance mode)
 pedal_ros2      →  clutch / recording     →  /scm_recording/start|end|toggle_pause
 rby1_core_msgs  →  /rby1_command          →  rby1_core_node            (pose commands)
