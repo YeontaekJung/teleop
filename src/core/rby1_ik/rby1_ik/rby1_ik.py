@@ -61,6 +61,7 @@ class Rby1Ik:
 
         q_ref = pin.neutral(self.robot.model)
         self.update_configuration(q_ref)
+        self._vel_smooth = np.zeros(self.robot.model.nv)
 
     # ------------------------------------------------------------------
     # Internal setup
@@ -171,6 +172,11 @@ class Rby1Ik:
             # Zero torso velocities (torso stays fixed during teleoperation)
             for idx_v in self._torso_v_indices:
                 velocity[idx_v] = 0.0
+
+            # EMA smoothing (reduces trembling on fast rotation)
+            alpha = 0.6
+            velocity = alpha * velocity + (1.0 - alpha) * self._vel_smooth
+            self._vel_smooth = velocity
 
             # Clamp max velocity
             max_teleop_dq = 1.5
