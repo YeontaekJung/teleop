@@ -122,8 +122,10 @@ class Rby1Ik:
         )
 
         # Tasks
-        self._task_left  = FrameTask('tracker_left',  position_cost=50.0, orientation_cost=0.5)
-        self._task_right = FrameTask('tracker_right', position_cost=50.0, orientation_cost=0.5)
+        # gain < 1.0: IK solves only a fraction of the error each step → natural LPF
+        # Pink docs: "Increasing gain can track with lower latency but may lead to more jerky motion"
+        self._task_left  = FrameTask('tracker_left',  position_cost=50.0, orientation_cost=0.5, gain=0.7)
+        self._task_right = FrameTask('tracker_right', position_cost=50.0, orientation_cost=0.5, gain=0.7)
         self._task_body  = FrameTask('link_torso_5',  position_cost=500.0, orientation_cost=20.0)
         self._task_posture = PostureTask(cost=1e-3)
 
