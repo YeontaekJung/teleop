@@ -99,7 +99,6 @@ class Rby1Ik:
         self.update_configuration(q_ref)
         self._oef = OneEuroFilterVec(self.robot.model.nv, freq=50.0,
                                      min_cutoff=1.0, beta=0.1)
-        self._last_velocity = np.zeros(self.robot.model.nv)
 
     # ------------------------------------------------------------------
     # Internal setup
@@ -138,12 +137,11 @@ class Rby1Ik:
         ]
 
         # Barriers
-        # gain 낮추고 d_min 줄여서 QP infeasibility 감소
         self._collision_barrier = SelfCollisionBarrier(
             n_collision_pairs=len(self.robot.collision_model.collisionPairs),
-            gain=5.0,
+            gain=20.0,
             safe_displacement_gain=1.0,
-            d_min=0.01,
+            d_min=0.02,
         )
         self.barriers = [self._collision_barrier]
 
@@ -220,13 +218,9 @@ class Rby1Ik:
             if max_abs > max_teleop_dq:
                 velocity = velocity / max_abs * max_teleop_dq
 
-            self._last_velocity = velocity.copy()
-
         except Exception as e:
-            # 실패 시 zero 대신 이전 velocity 감쇠 → 급작스러운 멈춤 방지
-            velocity = self._last_velocity * 0.5
-            self._last_velocity = velocity.copy()
-            print(f'[rby1_ik] solve_ik failed: {e} → using decayed velocity')
+            print(f'[rby1_ik] solve_ik failed: {e} → using zero velocity')
+            velocity = np.zeros(self.robot.model.nv)
 
         self.configuration.integrate_inplace(velocity, dt)
         return self._q_pin_to_q20(self.configuration.q)
