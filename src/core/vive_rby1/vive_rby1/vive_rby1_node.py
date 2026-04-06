@@ -427,8 +427,11 @@ class ViveRby1Node(Node):
     def _tracker_status(self, buf: deque, stamp: float) -> str:
         if time.monotonic() - stamp > 0.5:
             return 'LOST'
-        if len(buf) >= 10 and np.std(np.array(buf), axis=0).max() > 0.003:
-            return 'JITTER'
+        if len(buf) >= 10:
+            arr = np.array(buf)
+            vel = np.diff(arr, axis=0)
+            if np.std(vel, axis=0).max() > 0.003:
+                return 'JITTER'
         return 'OK'
 
     # ------------------------------------------------------------------
