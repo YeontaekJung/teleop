@@ -47,7 +47,7 @@ import time
 from collections import deque
 import numpy as np
 import pinocchio as pin
-from scipy.spatial.transform import Rotation as R
+from scipy.spatial.transform import Rotation as R, Slerp
 
 import rclpy
 from rclpy.node import Node
@@ -152,6 +152,9 @@ class ViveRby1Node(Node):
         # Tracker / joint state
         self._tracker_l: PoseStamped | None = None
         self._tracker_r: PoseStamped | None = None
+        self._tracker_l_se3: pin.SE3 | None = None  # smoothed SE3 for IK
+        self._tracker_r_se3: pin.SE3 | None = None
+        self._tracker_smooth_alpha = 0.5  # 0=no update 1=no smoothing
         self._joint_state: JointState | None = None
 
         # Tracker status monitoring
@@ -221,17 +224,32 @@ class ViveRby1Node(Node):
     # Callbacks
     # ------------------------------------------------------------------
 
+    def _smooth_tracker_se3(self, prev: pin.SE3 | None, msg: PoseStamped) -> pin.SE3:
+        p = msg.pose.position
+        q = msg.pose.orientation
+        pos_new = np.array([p.x, p.y, p.z])
+        rot_new = R.from_quat([q.x, q.y, q.z, q.w])
+        alpha = self._tracker_smooth_alpha
+        if prev is None:
+            return pin.SE3(rot_new.as_matrix(), pos_new)
+        pos_smooth = alpha * pos_new + (1.0 - alpha) * prev.translation
+        rot_smooth = Slerp([0, 1], R.from_quat(
+            [R.from_matrix(prev.rotation).as_quat(), rot_new.as_quat()]))(alpha)
+        return pin.SE3(rot_smooth.as_matrix(), pos_smooth)
+
     def _cb_tracker_l(self, msg: PoseStamped):
         self._tracker_l = msg
         self._tracker_stamp_l = time.monotonic()
         p = msg.pose.position
         self._tracker_buf_l.append([p.x, p.y, p.z])
+        self._tracker_l_se3 = self._smooth_tracker_se3(self._tracker_l_se3, msg)
 
     def _cb_tracker_r(self, msg: PoseStamped):
         self._tracker_r = msg
         self._tracker_stamp_r = time.monotonic()
         p = msg.pose.position
         self._tracker_buf_r.append([p.x, p.y, p.z])
+        self._tracker_r_se3 = self._smooth_tracker_se3(self._tracker_r_se3, msg)
 
     def _cb_joint_state(self, msg: JointState):
         self._joint_state = msg
@@ -454,8 +472,10 @@ class ViveRby1Node(Node):
         if not self._engaged or self._ref_l is None or self._ee_l_0 is None:
             return
 
-        tracker_l_now = pose_stamped_to_SE3(self._tracker_l)
-        tracker_r_now = pose_stamped_to_SE3(self._tracker_r)
+        tracker_l_now = self._tracker_l_se3
+        tracker_r_now = self._tracker_r_se3
+        if tracker_l_now is None or tracker_r_now is None:
+            return
 
         delta_l = tracker_l_now.translation - self._ref_l.translation
         delta_r = tracker_r_now.translation - self._ref_r.translation
