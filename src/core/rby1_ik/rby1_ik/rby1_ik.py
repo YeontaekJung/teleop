@@ -12,6 +12,42 @@ Key changes vs reference:
 import numpy as np
 import pinocchio as pin
 import pink
+
+
+class OneEuroFilterVec:
+    """Per-element One Euro Filter for n-dim vectors.
+    Adapts cutoff frequency based on signal speed:
+    slow/stationary → low cutoff (filter tremor),
+    fast/intentional → high cutoff (fast response).
+    """
+    def __init__(self, n: int, freq: float, min_cutoff: float = 1.0,
+                 beta: float = 0.1, d_cutoff: float = 1.0):
+        self._freq      = freq
+        self._min_cut   = min_cutoff
+        self._beta      = beta
+        self._d_cut     = d_cutoff
+        self._x         = np.zeros(n)
+        self._dx        = np.zeros(n)
+        self._ready     = False
+
+    def _alpha(self, cutoff: np.ndarray) -> np.ndarray:
+        tau = 1.0 / (2.0 * np.pi * cutoff)
+        return 1.0 / (1.0 + tau * self._freq)
+
+    def filter(self, x: np.ndarray) -> np.ndarray:
+        if not self._ready:
+            self._x = x.copy()
+            self._ready = True
+            return x
+        dx      = (x - self._x) * self._freq
+        a_d     = self._alpha(self._d_cut)
+        dx_hat  = a_d * dx + (1.0 - a_d) * self._dx
+        cutoff  = self._min_cut + self._beta * np.abs(dx_hat)
+        a       = self._alpha(cutoff)
+        x_hat   = a * x + (1.0 - a) * self._x
+        self._x  = x_hat
+        self._dx = dx_hat
+        return x_hat
 from pink import solve_ik
 from pink.barriers import SelfCollisionBarrier
 from pink.tasks import FrameTask, PostureTask
@@ -61,7 +97,8 @@ class Rby1Ik:
 
         q_ref = pin.neutral(self.robot.model)
         self.update_configuration(q_ref)
-        self._vel_smooth = np.zeros(self.robot.model.nv)
+        self._oef = OneEuroFilterVec(self.robot.model.nv, freq=50.0,
+                                     min_cutoff=1.0, beta=0.1)
 
     # ------------------------------------------------------------------
     # Internal setup
@@ -172,6 +209,9 @@ class Rby1Ik:
             # Zero torso velocities (torso stays fixed during teleoperation)
             for idx_v in self._torso_v_indices:
                 velocity[idx_v] = 0.0
+
+            # One Euro Filter — adaptive smoothing (hand tremor when slow, responsive when fast)
+            velocity = self._oef.filter(velocity)
 
             # Clamp max velocity
             max_teleop_dq = 1.5
