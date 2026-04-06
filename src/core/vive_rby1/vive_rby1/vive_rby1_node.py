@@ -232,6 +232,12 @@ class ViveRby1Node(Node):
         alpha = self._tracker_smooth_alpha
         if prev is None:
             return pin.SE3(rot_new.as_matrix(), pos_new)
+        # Clamp large position jumps (tracker dropout / jitter)
+        raw_delta = pos_new - prev.translation
+        delta_norm = np.linalg.norm(raw_delta)
+        MAX_DELTA = 0.05  # m/frame
+        if delta_norm > MAX_DELTA:
+            pos_new = prev.translation + raw_delta / delta_norm * MAX_DELTA
         pos_smooth = alpha * pos_new + (1.0 - alpha) * prev.translation
         rot_smooth = Slerp([0, 1], R.from_quat(
             [R.from_matrix(prev.rotation).as_quat(), rot_new.as_quat()]))(alpha)
