@@ -210,9 +210,6 @@ class Rby1Ik:
             for idx_v in self._torso_v_indices:
                 velocity[idx_v] = 0.0
 
-            # One Euro Filter — adaptive smoothing (hand tremor when slow, responsive when fast)
-            velocity = self._oef.filter(velocity)
-
             # Clamp max velocity
             max_teleop_dq = 1.5
             max_abs = np.max(np.abs(velocity))
