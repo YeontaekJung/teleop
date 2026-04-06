@@ -154,7 +154,7 @@ class ViveRby1Node(Node):
         self._tracker_r: PoseStamped | None = None
         self._tracker_l_se3: pin.SE3 | None = None  # smoothed SE3 for IK
         self._tracker_r_se3: pin.SE3 | None = None
-        self._tracker_smooth_alpha = 0.5  # 0=no update 1=no smoothing
+        self._tracker_smooth_alpha = 0.7  # 0=no update 1=no smoothing
         self._joint_state: JointState | None = None
 
         # Tracker status monitoring
@@ -302,8 +302,8 @@ class ViveRby1Node(Node):
             self.get_logger().warn('Trackers not ready — ignoring engage')
             return
 
-        self._ref_l = pose_stamped_to_SE3(self._tracker_l)
-        self._ref_r = pose_stamped_to_SE3(self._tracker_r)
+        self._ref_l = self._tracker_l_se3
+        self._ref_r = self._tracker_r_se3
 
         q_pin = self._ik.configuration.q
         fid_l = self._ik.robot.model.getFrameId('tracker_left')
@@ -346,7 +346,7 @@ class ViveRby1Node(Node):
                 return
             self._cli_end_rec.call_async(EndRecording.Request()).add_done_callback(self._on_end_done)
 
-    def _srv_toggle_episode(self, req, resp):
+    def _srv_toggle_episode(self, _req, resp):
         """Service handler — GUI Start/End Episode button."""
         self._toggle_episode()
         resp.success = True

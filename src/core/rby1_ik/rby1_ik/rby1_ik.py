@@ -173,11 +173,6 @@ class Rby1Ik:
             for idx_v in self._torso_v_indices:
                 velocity[idx_v] = 0.0
 
-            # EMA smoothing (reduces trembling on fast rotation)
-            alpha = 0.6
-            velocity = alpha * velocity + (1.0 - alpha) * self._vel_smooth
-            self._vel_smooth = velocity
-
             # Clamp max velocity
             max_teleop_dq = 1.5
             max_abs = np.max(np.abs(velocity))
