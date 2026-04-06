@@ -49,38 +49,6 @@ import numpy as np
 import pinocchio as pin
 from scipy.spatial.transform import Rotation as R, Slerp
 
-
-class OneEuroFilter3:
-    """One Euro Filter for 3D position vectors.
-    Adapts cutoff based on speed: slow → filter tremor, fast → responsive.
-    """
-    def __init__(self, freq: float, min_cutoff: float = 1.0,
-                 beta: float = 0.1, d_cutoff: float = 1.0):
-        self._freq    = freq
-        self._min_cut = min_cutoff
-        self._beta    = beta
-        self._d_cut   = d_cutoff
-        self._x       = None
-        self._dx      = np.zeros(3)
-
-    def _alpha(self, cutoff):
-        tau = 1.0 / (2.0 * np.pi * cutoff)
-        return 1.0 / (1.0 + tau * self._freq)
-
-    def filter(self, x: np.ndarray) -> np.ndarray:
-        if self._x is None:
-            self._x = x.copy()
-            return x
-        dx     = (x - self._x) * self._freq
-        a_d    = self._alpha(self._d_cut)
-        dx_hat = a_d * dx + (1.0 - a_d) * self._dx
-        cutoff = self._min_cut + self._beta * np.abs(dx_hat)
-        a      = self._alpha(cutoff)
-        x_hat  = a * x + (1.0 - a) * self._x
-        self._x  = x_hat
-        self._dx = dx_hat
-        return x_hat
-
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
@@ -186,9 +154,7 @@ class ViveRby1Node(Node):
         self._tracker_r: PoseStamped | None = None
         self._tracker_l_se3: pin.SE3 | None = None  # smoothed SE3 for IK
         self._tracker_r_se3: pin.SE3 | None = None
-        self._tracker_smooth_alpha = 0.7  # SLERP alpha for rotation (0=no update, 1=no smoothing)
-        self._oef_l = OneEuroFilter3(freq=50.0, min_cutoff=1.0, beta=0.1)
-        self._oef_r = OneEuroFilter3(freq=50.0, min_cutoff=1.0, beta=0.1)
+        self._tracker_smooth_alpha = 0.9  # SLERP alpha for rotation (0=no update, 1=no smoothing)
         self._joint_state: JointState | None = None
 
         # Tracker status monitoring
@@ -258,14 +224,12 @@ class ViveRby1Node(Node):
     # Callbacks
     # ------------------------------------------------------------------
 
-    def _smooth_tracker_se3(self, prev: pin.SE3 | None, msg: PoseStamped,
-                             oef: OneEuroFilter3) -> pin.SE3:
+    def _smooth_tracker_se3(self, prev: pin.SE3 | None, msg: PoseStamped) -> pin.SE3:
         p = msg.pose.position
         q = msg.pose.orientation
         pos_new = np.array([p.x, p.y, p.z])
         rot_new = R.from_quat([q.x, q.y, q.z, q.w])
         if prev is None:
-            oef.filter(pos_new)  # initialize filter state
             return pin.SE3(rot_new.as_matrix(), pos_new)
         # Clamp large position jumps (tracker dropout / jitter)
         raw_delta = pos_new - prev.translation
@@ -273,26 +237,25 @@ class ViveRby1Node(Node):
         MAX_DELTA = 0.05  # m/frame
         if delta_norm > MAX_DELTA:
             pos_new = prev.translation + raw_delta / delta_norm * MAX_DELTA
-        # One Euro Filter on position, SLERP on rotation
-        pos_smooth = oef.filter(pos_new)
+        # Light SLERP on rotation only — controller LPF handles the rest
         alpha = self._tracker_smooth_alpha
         rot_smooth = Slerp([0, 1], R.from_quat(
             [R.from_matrix(prev.rotation).as_quat(), rot_new.as_quat()]))(alpha)
-        return pin.SE3(rot_smooth.as_matrix(), pos_smooth)
+        return pin.SE3(rot_smooth.as_matrix(), pos_new)
 
     def _cb_tracker_l(self, msg: PoseStamped):
         self._tracker_l = msg
         self._tracker_stamp_l = time.monotonic()
         p = msg.pose.position
         self._tracker_buf_l.append([p.x, p.y, p.z])
-        self._tracker_l_se3 = self._smooth_tracker_se3(self._tracker_l_se3, msg, self._oef_l)
+        self._tracker_l_se3 = self._smooth_tracker_se3(self._tracker_l_se3, msg)
 
     def _cb_tracker_r(self, msg: PoseStamped):
         self._tracker_r = msg
         self._tracker_stamp_r = time.monotonic()
         p = msg.pose.position
         self._tracker_buf_r.append([p.x, p.y, p.z])
-        self._tracker_r_se3 = self._smooth_tracker_se3(self._tracker_r_se3, msg, self._oef_r)
+        self._tracker_r_se3 = self._smooth_tracker_se3(self._tracker_r_se3, msg)
 
     def _cb_joint_state(self, msg: JointState):
         self._joint_state = msg
