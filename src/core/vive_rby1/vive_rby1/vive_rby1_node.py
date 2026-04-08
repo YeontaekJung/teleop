@@ -492,16 +492,19 @@ class ViveRby1Node(Node):
         delta_l = tracker_l_now.translation - self._ref_l.translation
         delta_r = tracker_r_now.translation - self._ref_r.translation
 
-        # mirror mode: Y축 반전 (마주보면 좌우 대칭) + L/R arm target swap
-        v2r = self._v2r_R
         if self._mirror_mode:
-            v2r = self._v2r_R * np.array([1., -1., 1.])  # Y축 반전
-
-        target_pos_l = self._ee_l_0.translation + self._pos_scale * (v2r @ delta_l)
-        target_pos_r = self._ee_r_0.translation + self._pos_scale * (v2r @ delta_r)
-
-        dR_l = tracker_l_now.rotation @ self._ref_l.rotation.T
-        dR_r = tracker_r_now.rotation @ self._ref_r.rotation.T
+            # 마주보기: Y축 반전 + 내 오른손→로봇 왼팔, 내 왼손→로봇 오른팔
+            v2r = self._v2r_R * np.array([1., -1., 1.])
+            target_pos_l = self._ee_l_0.translation + self._pos_scale * (v2r @ delta_r)
+            target_pos_r = self._ee_r_0.translation + self._pos_scale * (v2r @ delta_l)
+            dR_l = tracker_r_now.rotation @ self._ref_r.rotation.T
+            dR_r = tracker_l_now.rotation @ self._ref_l.rotation.T
+        else:
+            v2r = self._v2r_R
+            target_pos_l = self._ee_l_0.translation + self._pos_scale * (v2r @ delta_l)
+            target_pos_r = self._ee_r_0.translation + self._pos_scale * (v2r @ delta_r)
+            dR_l = tracker_l_now.rotation @ self._ref_l.rotation.T
+            dR_r = tracker_r_now.rotation @ self._ref_r.rotation.T
 
         dR_l_robot = v2r @ dR_l @ v2r.T
         dR_r_robot = v2r @ dR_r @ v2r.T
@@ -509,14 +512,10 @@ class ViveRby1Node(Node):
         target_rot_l = dR_l_robot @ self._ee_l_0.rotation
         target_rot_r = dR_r_robot @ self._ee_r_0.rotation
 
-        ik_left  = pin.SE3(target_rot_l, target_pos_l)
-        ik_right = pin.SE3(target_rot_r, target_pos_r)
-
-        if self._mirror_mode:
-            # 내 왼손 → 로봇 오른팔, 내 오른손 → 로봇 왼팔
-            ik_left, ik_right = ik_right, ik_left
-
-        q20 = self._ik.solve_ik_to_q20(ik_left, ik_right, self._ik_dt)
+        q20 = self._ik.solve_ik_to_q20(
+            pin.SE3(target_rot_l, target_pos_l),
+            pin.SE3(target_rot_r, target_pos_r),
+            self._ik_dt)
 
         self._publish_q20(q20)
 
