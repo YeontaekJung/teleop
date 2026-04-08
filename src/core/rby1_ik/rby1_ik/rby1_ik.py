@@ -198,15 +198,6 @@ class Rby1Ik:
         self._task_left.set_target(l_SE3)
         self._task_right.set_target(r_SE3)
 
-        def _post_process(vel):
-            for idx_v in self._torso_v_indices:
-                vel[idx_v] = 0.0
-            max_teleop_dq = 1.5
-            max_abs = np.max(np.abs(vel))
-            if max_abs > max_teleop_dq:
-                vel = vel / max_abs * max_teleop_dq
-            return vel
-
         try:
             velocity = solve_ik(
                 self.configuration,
@@ -216,23 +207,20 @@ class Rby1Ik:
                 barriers=self.barriers,
                 safety_break=False,
             )
-            velocity = _post_process(velocity)
-        except Exception:
-            # proxqp 실패 시 scs로 재시도 (scs는 infeasible에서도 best-effort 해 반환)
-            try:
-                velocity = solve_ik(
-                    self.configuration,
-                    self.tasks,
-                    dt,
-                    solver='scs',
-                    barriers=self.barriers,
-                    safety_break=False,
-                )
-                velocity = _post_process(velocity)
-                print('[rby1_ik] proxqp failed → scs fallback used')
-            except Exception as e:
-                print(f'[rby1_ik] both solvers failed: {e} → zero velocity')
-                velocity = np.zeros(self.robot.model.nv)
+
+            # Zero torso velocities (torso stays fixed during teleoperation)
+            for idx_v in self._torso_v_indices:
+                velocity[idx_v] = 0.0
+
+            # Clamp max velocity
+            max_teleop_dq = 1.5
+            max_abs = np.max(np.abs(velocity))
+            if max_abs > max_teleop_dq:
+                velocity = velocity / max_abs * max_teleop_dq
+
+        except Exception as e:
+            print(f'[rby1_ik] solve_ik failed: {e} → using zero velocity')
+            velocity = np.zeros(self.robot.model.nv)
 
         self.configuration.integrate_inplace(velocity, dt)
         return self._q_pin_to_q20(self.configuration.q)
