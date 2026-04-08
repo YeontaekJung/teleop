@@ -118,7 +118,6 @@ ros2 launch teleop_bringup teleop.launch.py
 **Before launching** — run on the host:
 - `xhost +local:docker` — allow GUI (teleop_gui) through X11
 - Start SteamVR and pair Vive trackers
-- Start Manus Core
 
 ### 3. (Option B) Native — system dependencies
 
