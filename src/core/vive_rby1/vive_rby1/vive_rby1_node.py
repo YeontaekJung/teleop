@@ -492,15 +492,14 @@ class ViveRby1Node(Node):
         delta_l = tracker_l_now.translation - self._ref_l.translation
         delta_r = tracker_r_now.translation - self._ref_r.translation
 
+        v2r = self._v2r_R
         if self._mirror_mode:
-            # 마주보기: Y축 반전 + 내 오른손→로봇 왼팔, 내 왼손→로봇 오른팔
-            v2r = self._v2r_R * np.array([1., -1., 1.])
+            # 마주보기: 기존 v2r_R 그대로, tracker만 교차 (오른손→왼팔, 왼손→오른팔)
             target_pos_l = self._ee_l_0.translation + self._pos_scale * (v2r @ delta_r)
             target_pos_r = self._ee_r_0.translation + self._pos_scale * (v2r @ delta_l)
             dR_l = tracker_r_now.rotation @ self._ref_r.rotation.T
             dR_r = tracker_l_now.rotation @ self._ref_l.rotation.T
         else:
-            v2r = self._v2r_R
             target_pos_l = self._ee_l_0.translation + self._pos_scale * (v2r @ delta_l)
             target_pos_r = self._ee_r_0.translation + self._pos_scale * (v2r @ delta_r)
             dR_l = tracker_l_now.rotation @ self._ref_l.rotation.T
