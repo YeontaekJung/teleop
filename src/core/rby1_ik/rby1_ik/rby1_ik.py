@@ -137,15 +137,17 @@ class Rby1Ik:
         ]
 
         # Barriers
-        # d_min: 최소 충돌 안전거리 (이보다 가까우면 barrier 작동)
-        # d_min=0.02 (2cm)에서 QP infeasible 빈발 → 0.005 (5mm)로 축소
+        # SelfCollisionBarrier가 QP infeasible 유발 → 비활성화
+        # collision 상황이 아닌데도 barrier constraint가 task와 충돌하는 케이스 존재
+        # 필요시 아래 주석 해제
         self._collision_barrier = SelfCollisionBarrier(
             n_collision_pairs=len(self.robot.collision_model.collisionPairs),
             gain=20.0,
             safe_displacement_gain=1.0,
             d_min=0.005,
         )
-        self.barriers = [self._collision_barrier]
+        # self.barriers = [self._collision_barrier]
+        self.barriers = []
 
         # Build velocity mask: zero out torso joints during solve
         # (torso stays fixed during teleoperation)

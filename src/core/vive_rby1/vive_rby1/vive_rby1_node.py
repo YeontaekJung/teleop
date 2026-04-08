@@ -494,15 +494,18 @@ class ViveRby1Node(Node):
 
         v2r = self._v2r_R
         if self._mirror_mode:
-            # 마주보기: tracker 교차 (오른손→왼팔, 왼손→오른팔)
+            # 마주보기: tracker 교차 (오른손→왼팔, 왼손→오른팔) + 좌우축 반전
+            # mirror_flip: robot Y축(좌우)만 반전 — 마주보면 좌우가 대칭
+            mirror_flip = np.diag([1., -1., 1.])
             #
-            # --- 옵션 A: 뻗으면 로봇 팔이 나에게 다가옴 (기본) ---
-            target_pos_l = self._ee_l_0.translation + self._pos_scale * (v2r @ delta_r)
-            target_pos_r = self._ee_r_0.translation + self._pos_scale * (v2r @ delta_l)
+            # --- 옵션 A (기본): 마주보고 뻗으면 다가옴 ---
+            target_pos_l = self._ee_l_0.translation + self._pos_scale * (mirror_flip @ v2r @ delta_r)
+            target_pos_r = self._ee_r_0.translation + self._pos_scale * (mirror_flip @ v2r @ delta_l)
             #
-            # --- 옵션 B: 뻗으면 로봇 팔이 같은 방향으로 (위 두 줄 주석 후 아래 해제) ---
-            # target_pos_l = self._ee_l_0.translation - self._pos_scale * (v2r @ delta_r)
-            # target_pos_r = self._ee_r_0.translation - self._pos_scale * (v2r @ delta_l)
+            # --- 옵션 B: forward도 반전 (위 두 줄 주석 후 아래 해제) ---
+            # flip_all = np.diag([-1., -1., 1.])
+            # target_pos_l = self._ee_l_0.translation + self._pos_scale * (flip_all @ v2r @ delta_r)
+            # target_pos_r = self._ee_r_0.translation + self._pos_scale * (flip_all @ v2r @ delta_l)
 
             dR_l = tracker_r_now.rotation @ self._ref_r.rotation.T
             dR_r = tracker_l_now.rotation @ self._ref_l.rotation.T
