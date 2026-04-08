@@ -494,9 +494,16 @@ class ViveRby1Node(Node):
 
         v2r = self._v2r_R
         if self._mirror_mode:
-            # 마주보기: 기존 v2r_R 그대로, tracker만 교차 (오른손→왼팔, 왼손→오른팔)
+            # 마주보기: tracker 교차 (오른손→왼팔, 왼손→오른팔)
+            #
+            # --- 옵션 A: 뻗으면 로봇 팔이 나에게 다가옴 (기본) ---
             target_pos_l = self._ee_l_0.translation + self._pos_scale * (v2r @ delta_r)
             target_pos_r = self._ee_r_0.translation + self._pos_scale * (v2r @ delta_l)
+            #
+            # --- 옵션 B: 뻗으면 로봇 팔이 같은 방향으로 (위 두 줄 주석 후 아래 해제) ---
+            # target_pos_l = self._ee_l_0.translation - self._pos_scale * (v2r @ delta_r)
+            # target_pos_r = self._ee_r_0.translation - self._pos_scale * (v2r @ delta_l)
+
             dR_l = tracker_r_now.rotation @ self._ref_r.rotation.T
             dR_r = tracker_l_now.rotation @ self._ref_l.rotation.T
         else:
