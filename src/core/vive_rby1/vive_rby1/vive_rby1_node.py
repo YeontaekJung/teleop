@@ -518,6 +518,11 @@ class ViveRby1Node(Node):
         dR_l_robot = v2r @ dR_l @ v2r.T
         dR_r_robot = v2r @ dR_r @ v2r.T
 
+        if self._mirror_mode:
+            mirror_flip_rot = np.diag([1., -1., 1.])
+            dR_l_robot = mirror_flip_rot @ dR_l_robot @ mirror_flip_rot
+            dR_r_robot = mirror_flip_rot @ dR_r_robot @ mirror_flip_rot
+
         target_rot_l = dR_l_robot @ self._ee_l_0.rotation
         target_rot_r = dR_r_robot @ self._ee_r_0.rotation
 

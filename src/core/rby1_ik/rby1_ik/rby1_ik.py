@@ -105,7 +105,7 @@ class Rby1Ik:
     # ------------------------------------------------------------------
 
     def _init_pink(self, urdf_path: str, srdf_path: str):
-        self._solver = 'proxqp'   # faster than 'scs'
+        self._solver = 'quadprog'   # 'proxqp' causes issues, fallback to 'quadprog' or 'scs'
 
         self.robot = pin.RobotWrapper.BuildFromURDF(
             filename=urdf_path,
