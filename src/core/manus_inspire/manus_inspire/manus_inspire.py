@@ -2,6 +2,7 @@ import os
 import yaml
 import rclpy
 from rclpy.node import Node
+from std_msgs.msg import String
 from std_srvs.srv import Trigger
 from manus_ros2_msgs.msg import ManusGlove
 from inspire_hand_msgs.msg import InspireHandCtrl
@@ -52,9 +53,12 @@ class ManusInspire(Node):
             self.get_logger().warn("No calibration file found — starting calibration now.")
             self._start_calib()
 
+        self._mirror_mode = False
+
         # Subscribe to both glove topics with the same callback — side is determined by msg.side
         self.sub_0 = self.create_subscription(ManusGlove, "/manus_glove_0", self.cb_glove, 10)
         self.sub_1 = self.create_subscription(ManusGlove, "/manus_glove_1", self.cb_glove, 10)
+        self.create_subscription(String, '/teleop/mirror_mode', self._cb_mirror_mode, 10)
 
         self.pub_l = self.create_publisher(InspireHandCtrl, "/rt/inspire_hand/ctrl/l", 2)
         self.pub_r = self.create_publisher(InspireHandCtrl, "/rt/inspire_hand/ctrl/r", 2)
@@ -210,6 +214,9 @@ class ManusInspire(Node):
     # --------------------------------------------------
     # Callback
     # --------------------------------------------------
+    def _cb_mirror_mode(self, msg: String):
+        self._mirror_mode = (msg.data == 'mirror')
+
     def cb_glove(self, msg):
         # Determine hand from msg.side ("Left" / "Right") — not from topic number
         if msg.side == 'Left':
@@ -226,10 +233,12 @@ class ManusInspire(Node):
             return
 
         ctrl = self.map_manus(ergo, hand=hand)
-        if hand == 'left':
-            self.pub_l.publish(ctrl)
+        # mirror mode: 내 왼손 → 오른 핸드, 내 오른손 → 왼 핸드
+        if self._mirror_mode:
+            pub = self.pub_r if hand == 'left' else self.pub_l
         else:
-            self.pub_r.publish(ctrl)
+            pub = self.pub_l if hand == 'left' else self.pub_r
+        pub.publish(ctrl)
 
     # --------------------------------------------------
     # Mapping

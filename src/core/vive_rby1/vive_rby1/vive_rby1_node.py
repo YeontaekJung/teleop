@@ -181,6 +181,7 @@ class ViveRby1Node(Node):
 
         # Control mode: False = position, True = impedance
         self._use_impedance = False
+        self._mirror_mode   = False  # True = facing operator (L/R swap + Y flip)
         self._warmup_ticks  = 0   # countdown for pre-engage hold publish
         self._teleop_active = False  # True once teleop_start / impedance_teleop_start is sent
 
@@ -192,6 +193,7 @@ class ViveRby1Node(Node):
         self.create_subscription(Int32,  '/teleop/task_id',      self._cb_task_id,       10)
         self.create_subscription(String, '/teleop/control_mode',   self._cb_control_mode,   10)
         self.create_subscription(String, '/teleop/rby1_command',   self._cb_rby1_command,   10)
+        self.create_subscription(String, '/teleop/mirror_mode',    self._cb_mirror_mode,    10)
 
         # Publishers
         self._pub_cmd           = self.create_publisher(JointGroupCommand, topic_cmd,                          10)
@@ -268,6 +270,10 @@ class ViveRby1Node(Node):
     def _cb_control_mode(self, msg: String):
         self._use_impedance = (msg.data == 'impedance')
         self.get_logger().info(f'[vive_rby1] control mode → {msg.data}')
+
+    def _cb_mirror_mode(self, msg: String):
+        self._mirror_mode = (msg.data == 'mirror')
+        self.get_logger().info(f'[vive_rby1] mirror mode → {self._mirror_mode}')
 
     def _cb_rby1_command(self, msg: String):
         cmd = msg.data
@@ -486,22 +492,31 @@ class ViveRby1Node(Node):
         delta_l = tracker_l_now.translation - self._ref_l.translation
         delta_r = tracker_r_now.translation - self._ref_r.translation
 
-        target_pos_l = self._ee_l_0.translation + self._pos_scale * (self._v2r_R @ delta_l)
-        target_pos_r = self._ee_r_0.translation + self._pos_scale * (self._v2r_R @ delta_r)
+        # mirror mode: Y축 반전 (마주보면 좌우 대칭) + L/R arm target swap
+        v2r = self._v2r_R
+        if self._mirror_mode:
+            v2r = self._v2r_R * np.array([1., -1., 1.])  # Y축 반전
+
+        target_pos_l = self._ee_l_0.translation + self._pos_scale * (v2r @ delta_l)
+        target_pos_r = self._ee_r_0.translation + self._pos_scale * (v2r @ delta_r)
 
         dR_l = tracker_l_now.rotation @ self._ref_l.rotation.T
         dR_r = tracker_r_now.rotation @ self._ref_r.rotation.T
 
-        dR_l_robot = self._v2r_R @ dR_l @ self._v2r_R.T
-        dR_r_robot = self._v2r_R @ dR_r @ self._v2r_R.T
+        dR_l_robot = v2r @ dR_l @ v2r.T
+        dR_r_robot = v2r @ dR_r @ v2r.T
 
         target_rot_l = dR_l_robot @ self._ee_l_0.rotation
         target_rot_r = dR_r_robot @ self._ee_r_0.rotation
 
-        q20 = self._ik.solve_ik_to_q20(
-            pin.SE3(target_rot_l, target_pos_l),
-            pin.SE3(target_rot_r, target_pos_r),
-            self._ik_dt)
+        ik_left  = pin.SE3(target_rot_l, target_pos_l)
+        ik_right = pin.SE3(target_rot_r, target_pos_r)
+
+        if self._mirror_mode:
+            # 내 왼손 → 로봇 오른팔, 내 오른손 → 로봇 왼팔
+            ik_left, ik_right = ik_right, ik_left
+
+        q20 = self._ik.solve_ik_to_q20(ik_left, ik_right, self._ik_dt)
 
         self._publish_q20(q20)
 
