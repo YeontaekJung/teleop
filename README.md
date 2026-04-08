@@ -63,7 +63,33 @@ If the `.so` files are missing or zero-byte, Git LFS is not installed — instal
 sudo apt install git-lfs && git lfs install && git lfs pull
 ```
 
-### 3. System dependencies
+### 3. (Option A) Docker — recommended
+
+Place the corporate CA certificate in the docker folder, then build and run:
+
+```bash
+cp /path/to/McAfee_Certificate.crt docker/
+
+docker compose -f docker/docker-compose.yaml build
+docker compose -f docker/docker-compose.yaml run --rm teleop
+```
+
+> If not on a proxied network, comment out the two `COPY McAfee_Certificate.crt` / `RUN update-ca-certificates` lines in `docker/Dockerfile` before building.
+
+Inside the container:
+
+```bash
+cb    # colcon build (alias)
+sr    # source install/setup.bash (alias)
+ros2 launch teleop_bringup teleop.launch.py
+```
+
+**Before launching** — run on the host:
+- `xhost +local:docker` — allow GUI (teleop_gui) through X11
+- Start SteamVR and pair Vive trackers
+- Start Manus Core
+
+### 3. (Option B) Native — system dependencies
 
 ```bash
 sudo apt install ros-humble-desktop python3-pip
@@ -88,7 +114,7 @@ pip3 install empy==3.3.4   # required for colcon build — do NOT use empy 4.x
 > which python3  # should be /usr/bin/python3
 > ```
 
-### 4. Build
+### 4. (Option B) Build
 
 ```bash
 cd 2026
@@ -292,7 +318,8 @@ ros2 run teleop_gui teleop_gui_node
 - `conda deactivate` before sourcing ROS or running colcon.
 
 **ManusSDK not found**
-- Confirm `ManusSDK/include/ManusSDK.h` and `ManusSDK/lib/libManusSDK.so` exist at the repo root.
+- Run `git lfs pull` — the `.so` files are stored in Git LFS and may not have been fetched.
+- Confirm `ManusSDK/include/ManusSDK.h` and `ManusSDK/lib/libManusSDK.so` exist and are non-zero.
 
 **`/rby1_command` action not available**
 - `rby1_core_node` must be running separately (not part of this repo).
