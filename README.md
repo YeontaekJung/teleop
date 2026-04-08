@@ -48,23 +48,20 @@ git clone <repo-url> 2026
 cd 2026
 ```
 
-### 2. ManusSDK (manual copy required — binary too large for git)
+### 2. ManusSDK (tracked via Git LFS)
 
-Copy the ManusSDK folder to the repo root:
+Headers and shared libraries are stored in Git LFS. After cloning, pull LFS objects:
 
-```
-2026/
-└── ManusSDK/
-    ├── include/
-    │   ├── ManusSDK.h
-    │   ├── ManusSDKTypeInitializers.h
-    │   └── ManusSDKTypes.h
-    └── lib/
-        ├── libManusSDK.so
-        └── libManusSDK_Integrated.so
+```bash
+git lfs pull
 ```
 
-Obtain from the Manus developer portal, or copy from a machine that already has it.
+This populates `ManusSDK/lib/libManusSDK.so` and `libManusSDK_Integrated.so`.
+If the `.so` files are missing or zero-byte, Git LFS is not installed — install it first:
+
+```bash
+sudo apt install git-lfs && git lfs install && git lfs pull
+```
 
 ### 3. System dependencies
 

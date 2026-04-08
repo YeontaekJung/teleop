@@ -4,9 +4,9 @@
 /ROS_BAG/*
 #*.zip
 
-# ManusSDK - binary too large for GitHub (>100MB), copy manually to repo root
-# See README.md → ManusSDK Setup
-/ManusSDK/
+# ManusSDK - headers tracked normally, .so via Git LFS (.gitattributes)
+# (nothing ignored here — ManusSDK/ is now in git)
+*.7z
 
 # ROS2 colcon artifacts
 /build/

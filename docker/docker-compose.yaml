@@ -1,0 +1,19 @@
+services:
+  teleop:
+    image: scm-teleoperation:humble
+    build:
+      network: host
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: bash
+    environment:
+      - DISPLAY
+    volumes:
+      - ${HOME}/.Xauthority:/root/.Xauthority
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ${PWD}/..:/home/ros2_ws        # repo root IS the colcon workspace
+    devices:
+      - /dev/input:/dev/input         # pedal (evdev)
+    network_mode: host
+    stdin_open: true
+    tty: true

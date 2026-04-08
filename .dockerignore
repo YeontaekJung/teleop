@@ -1,0 +1,12 @@
+.git/
+.claude/
+*.7z
+build/
+install/
+log/
+ROS_BAG/
+src/
+robot_description/
+config/
+launch/
+ManusSDK/include/
