@@ -11,7 +11,7 @@ RUN echo 'Acquire::http::Proxy "http://12.26.204.100:8080";' \
       > /etc/apt/apt.conf.d/99proxy
 
 # ── Certificates ─────────────────────────────────────────────────────────────
-# McAfee_Certificate.crt must be present in repo root before building.
+# McAfee_Certificate.crt must be present in docker/ before building.
 # Comment out the two lines below if not in a proxied network.
 COPY docker/McAfee_Certificate.crt /usr/share/ca-certificates/McAfee_Certificate.crt
 RUN update-ca-certificates
