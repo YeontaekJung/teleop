@@ -205,10 +205,10 @@ class ManusInspire(Node):
 
     def build_msg(self, pinky, ring, middle, index, thumb, spread):
         msg = InspireHandCtrl()
-        msg.mode = 0b1001  # angle + speed
+        msg.mode = 0b1101  # angle + force + speed
         msg.angle_set = [pinky, ring, middle, index, thumb, spread]
         msg.speed_set  = [MAX_INSPIRE] * 6
-        msg.force_set  = [0] * 6
+        msg.force_set  = [800] * 6
         return msg
 
     # --------------------------------------------------
