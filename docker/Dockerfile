@@ -56,8 +56,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # ── ROS2 extras ───────────────────────────────────────────────────────────────
 # ros-humble-desktop-full already includes geometry/sensor/std/action/tf2 msgs.
+# moveit_msgs required by rby1_core_msgs srv definitions (GetJointMotionPlan etc.)
 RUN apt-get update && apt-get install -y \
-    ros-humble-rmw-cyclonedds-cpp && \
+    ros-humble-rmw-cyclonedds-cpp \
+    ros-humble-moveit-msgs && \
     rm -rf /var/lib/apt/lists/*
 
 # ── ManusSDK shared libraries ─────────────────────────────────────────────────
