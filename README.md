@@ -39,6 +39,19 @@ A GUI node (`teleop_gui`) provides live system status, teleop controls, tracker 
 - ManusSDK (see Installation step 2)
 - `rby1_core` package installed (provides `Rby1ControllerJointTeleop`, `Rby1ControllerJointImpedanceTeleop`, etc.)
 
+## Quick Start
+
+Start SteamVR and pair all Vive devices, then:
+
+```bash
+source install/setup.bash
+ros2 launch teleop_bringup teleop.launch.py
+```
+
+This launches all nodes: pedal driver, Vive tracker, Manus publisher, arm IK bridge, hand mapper, and GUI.
+
+The GUI shows live node status, pedal state, tracker status (OK / JITTER / LOST), recording state, control mode selector, teleop buttons, and the calibration panel.
+
 ## Installation
 
 ### 1. Clone the repository
@@ -142,19 +155,6 @@ Adjustable in `src/launch/teleop_bringup/launch/teleop.launch.py`:
 | `pos_scale` | 1.0 | Tracker-to-robot position scale (1.0 = 1:1) |
 
 `max_teleop_dq` (joint velocity clamp, rad/s) is set in `src/core/rby1_ik/rby1_ik/rby1_ik.py`.
-
-## Quick Start
-
-Start SteamVR and pair all Vive devices, then:
-
-```bash
-source install/setup.bash
-ros2 launch teleop_bringup teleop.launch.py
-```
-
-This launches all nodes: pedal driver, Vive tracker, Manus publisher, arm IK bridge, hand mapper, and GUI.
-
-The GUI shows live node status, pedal state, tracker status (OK / JITTER / LOST), recording state, control mode selector, teleop buttons, and the calibration panel.
 
 ## Usage
 
@@ -295,7 +295,7 @@ ros2 run teleop_gui teleop_gui_node
 - `conda deactivate` before sourcing ROS or running colcon.
 
 **ManusSDK not found**
-- Confirm `ManusSDK/include/ManusSDK.h` and `ManusSDK/lib/libManusSDK.so` exist at the repo root.
+- Confirm `ManusSDK/include/ManusSDK.h` and `ManusSDK/lib/libManusSDK.so` exist at the repo root and are non-zero size.
 
 **`/rby1_command` action not available**
 - `rby1_core_node` must be running separately (not part of this repo).
