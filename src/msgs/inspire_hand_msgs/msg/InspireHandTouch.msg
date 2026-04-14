@@ -13,5 +13,5 @@ int16[80]  fingerfour_palm_touch
 int16[9]   fingerfive_tip_touch
 int16[96]  fingerfive_top_touch
 int16[9]   fingerfive_middle_touch
-int16[80]  fingerfive_palm_touch
+int16[96]  fingerfive_palm_touch
 int16[112] palm_touch
