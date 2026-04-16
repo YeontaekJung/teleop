@@ -410,9 +410,7 @@ class ViveRby1Node(Node):
             if on_complete:
                 on_complete()
             return
-        if command in ('teleop_start', 'impedance_teleop_start'):
-            self._teleop_active = True
-        elif command == 'teleop_stop':
+        if command == 'teleop_stop':
             self._teleop_active = False
             self._engaged = False
 
@@ -428,10 +426,18 @@ class ViveRby1Node(Node):
                 if on_complete:
                     on_complete()
                 return
-            def _on_result(_):
+            def _on_result(result_future):
+                result = result_future.result()
+                succeeded = (result.status == 4)  # GoalStatus.STATUS_SUCCEEDED = 4
+                if command in ('teleop_start', 'impedance_teleop_start'):
+                    if succeeded:
+                        self._teleop_active = True
+                    else:
+                        self._teleop_active = False
+                        self.get_logger().error(f'rby1_command "{command}" failed — stream may have expired')
                 if on_complete:
                     on_complete()
-                if then:
+                if then and succeeded:
                     threading.Timer(1.0, lambda: self._send_rby1_command(then)).start()
             goal_handle.get_result_async().add_done_callback(_on_result)
         future.add_done_callback(_on_accepted)
