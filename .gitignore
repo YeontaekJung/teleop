@@ -17,4 +17,8 @@
 /CLAUDE.md
 /plan.md
 /research.md
+/research.txt
 /update.md
+
+# Claude Code local config
+/.claude/

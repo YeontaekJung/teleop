@@ -150,8 +150,8 @@ Adjustable in `src/launch/teleop_bringup/launch/teleop.launch.py`:
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `publish_rate` | 50.0 Hz | IK command publish rate |
-| `ik_dt` | 0.1 s | Differential IK time step (larger = faster tracking, more overshoot) |
+| `publish_rate` | 100.0 Hz | IK command publish rate |
+| `ik_dt` | 0.05 s | Differential IK time step (larger = faster tracking, more overshoot) |
 | `pos_scale` | 1.0 | Tracker-to-robot position scale (1.0 = 1:1) |
 
 `max_teleop_dq` (joint velocity clamp, rad/s) is set in `src/core/rby1_ik/rby1_ik/rby1_ik.py`.
