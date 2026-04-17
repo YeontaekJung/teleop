@@ -33,7 +33,7 @@ def generate_launch_description():
             executable='vive_rby1_node',
             name='vive_rby1_node',
             output='screen',
-            parameters=[{'publish_rate': 50.0, 'ik_dt': 0.1, 'pos_scale': 1.5}],
+            parameters=[{'publish_rate': 100.0, 'ik_dt': 0.05, 'pos_scale': 1.5}],
         ),
 
         Node(
