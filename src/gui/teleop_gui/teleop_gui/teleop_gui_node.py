@@ -203,6 +203,7 @@ class TeleopGuiWindow(QWidget):
         self._node      = ros_node
         self._sig       = signals
         self._rec_state = 'IDLE'
+        self._stream_on = False
 
         signals.pedal_updated.connect(self._on_pedal)
         signals.node_status_updated.connect(self._on_nodes)
@@ -519,6 +520,10 @@ class TeleopGuiWindow(QWidget):
         _set(self._lbl_stream,  'Stream On' if stream  else 'Stream Off', _C_ON if stream  else _C_OFF)
         _set(self._lbl_gripper, 'Gripper ✓' if gripper else 'Gripper ✗',  _C_ON if gripper else _C_OFF)
 
+        if stream != self._stream_on:
+            self._stream_on = stream
+            self._refresh_pedal_a()
+
         if ctrl == 'State.Enabled':
             _set(self._lbl_control, 'Enabled', _C_ON)
         elif 'Fault' in ctrl:
@@ -526,10 +531,26 @@ class TeleopGuiWindow(QWidget):
         else:
             _set(self._lbl_control, 'Idle', _C_OFF)
 
-    def _on_pedal(self, state: list):
-        for btn, pressed in zip(self._btn_pedals, state):
+    def _refresh_pedal_a(self):
+        """stream off이면 pedal A(engage toggle)를 dimmed 처리"""
+        btn = self._btn_pedals[0]
+        if not self._stream_on:
+            btn.setStyleSheet('background-color: #e0e0e0; color: #aaa;')
+        else:
+            pressed = btn.property('pressed') or False
             color = '#A6D256' if pressed else '#ccc'
             btn.setStyleSheet(f'background-color: {color}; color: #333;')
+
+    def _on_pedal(self, state: list):
+        for i, (btn, pressed) in enumerate(zip(self._btn_pedals, state)):
+            if i == 0 and not self._stream_on:
+                # pedal A: stream off이면 눌려도 dimmed 유지
+                btn.setProperty('pressed', pressed)
+                continue
+            color = '#A6D256' if pressed else '#ccc'
+            btn.setStyleSheet(f'background-color: {color}; color: #333;')
+            if i == 0:
+                btn.setProperty('pressed', pressed)
 
     def _on_nodes(self, status: dict):
         for node, alive in status.items():
