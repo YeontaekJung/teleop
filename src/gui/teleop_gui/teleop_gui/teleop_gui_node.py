@@ -3,6 +3,17 @@ teleop_gui_node.py  (v2 — wide layout)
 
 Top:    RB-Y1 area  — connect, status, power/servo/pose controls
 Bottom: Teleop area — node status, pedal, teleop, recording, calibration
+
+Widget naming convention
+  _lbl_*   QLabel
+  _btn_*   QPushButton
+  _rb_*    QRadioButton
+  _bg_*    QButtonGroup
+  _le_*    QLineEdit
+  _chk_*   QCheckBox
+  _spin_*  QSpinBox
+  _pbar_*  QProgressBar
+  _timer_* QTimer
 """
 
 import json
@@ -18,7 +29,7 @@ from std_srvs.srv import Trigger
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout,
     QGroupBox, QLabel, QPushButton, QProgressBar, QGridLayout,
-    QRadioButton, QButtonGroup, QSpinBox, QLineEdit,
+    QRadioButton, QButtonGroup, QSpinBox, QLineEdit, QCheckBox,
 )
 from PySide6.QtCore import Qt, QTimer, Signal, QObject
 from PySide6.QtGui import QFont
@@ -41,10 +52,8 @@ REC_STATE_STYLE = {
     'PAUSED':    ('⬤ PAUSED',    '#E08020'),
 }
 
-# status indicator colors
 _C_ON    = '#A6D256'
-_C_OFF   = '#ED325A'
-_C_IDLE  = 'lightgray'
+_C_OFF   = 'lightgray'
 _C_FAULT = '#ED325A'
 
 
@@ -56,13 +65,13 @@ class TeleopGuiNode(Node):
 
     def __init__(self):
         super().__init__('teleop_gui')
-        self._pedal_state = [0, 0, 0]
-        self._pedal_cbs         = []
-        self._node_status_cbs   = []
-        self._rec_state_cbs     = []
-        self._rec_episode_cbs   = []
-        self._tracker_status_cbs = []
-        self._rby1_status_cbs   = []
+        self._pedal_state         = [0, 0, 0]
+        self._pedal_cbs           = []
+        self._node_status_cbs     = []
+        self._rec_state_cbs       = []
+        self._rec_episode_cbs     = []
+        self._tracker_status_cbs  = []
+        self._rby1_status_cbs     = []
 
         self.create_subscription(Joy,    '/teleop/pedal',          self._cb_pedal,          10)
         self.create_subscription(String, '/teleop/rec_state',      self._cb_rec_state,      10)
@@ -74,10 +83,10 @@ class TeleopGuiNode(Node):
         self._calib_client     = self.create_client(Trigger, '/manus_inspire/calibrate')
         self._toggle_ep_client = self.create_client(Trigger, '/vive_rby1/toggle_episode')
 
-        self._task_id_pub      = self.create_publisher(Int32,  '/teleop/task_id',      10)
-        self._control_mode_pub = self.create_publisher(String, '/teleop/control_mode', 10)
-        self._rby1_cmd_pub     = self.create_publisher(String, '/teleop/rby1_command', 10)
-        self._mirror_mode_pub  = self.create_publisher(String, '/teleop/mirror_mode',  10)
+        self._pub_task_id      = self.create_publisher(Int32,  '/teleop/task_id',      10)
+        self._pub_control_mode = self.create_publisher(String, '/teleop/control_mode', 10)
+        self._pub_rby1_cmd     = self.create_publisher(String, '/teleop/rby1_command', 10)
+        self._pub_mirror_mode  = self.create_publisher(String, '/teleop/mirror_mode',  10)
 
     # ── callbacks ──────────────────────────────────────────────────────────
 
@@ -118,31 +127,31 @@ class TeleopGuiNode(Node):
 
     # ── publishers / service calls ─────────────────────────────────────────
 
-    def publish_task_id(self, task_id):
-        self._task_id_pub.publish(Int32(data=task_id))
+    def pub_task_id(self, task_id: int):
+        self._pub_task_id.publish(Int32(data=task_id))
 
-    def publish_control_mode(self, mode):
-        self._control_mode_pub.publish(String(data=mode))
+    def pub_control_mode(self, mode: str):
+        self._pub_control_mode.publish(String(data=mode))
 
-    def publish_rby1_command(self, command):
-        self._rby1_cmd_pub.publish(String(data=command))
+    def pub_rby1_cmd(self, command: str):
+        self._pub_rby1_cmd.publish(String(data=command))
 
-    def publish_mirror_mode(self, mirror):
-        self._mirror_mode_pub.publish(String(data='mirror' if mirror else 'normal'))
+    def pub_mirror_mode(self, mirror: bool):
+        self._pub_mirror_mode.publish(String(data='mirror' if mirror else 'normal'))
 
     def call_calibrate(self, done_cb):
         if not self._calib_client.wait_for_service(timeout_sec=1.0):
             done_cb(False, 'Service not available')
             return
-        future = self._calib_client.call_async(Trigger.Request())
-        future.add_done_callback(lambda f: done_cb(f.result().success, f.result().message))
+        fut = self._calib_client.call_async(Trigger.Request())
+        fut.add_done_callback(lambda f: done_cb(f.result().success, f.result().message))
 
     def call_toggle_episode(self, done_cb):
         if not self._toggle_ep_client.wait_for_service(timeout_sec=1.0):
             done_cb(False, 'Service not available')
             return
-        future = self._toggle_ep_client.call_async(Trigger.Request())
-        future.add_done_callback(lambda f: done_cb(f.result().success, f.result().message))
+        fut = self._toggle_ep_client.call_async(Trigger.Request())
+        fut.add_done_callback(lambda f: done_cb(f.result().success, f.result().message))
 
 
 # ---------------------------------------------------------------------------
@@ -162,24 +171,25 @@ class Signals(QObject):
 
 
 # ---------------------------------------------------------------------------
-# Helper: colored status label
+# Helpers
 # ---------------------------------------------------------------------------
 
-def _status_label(title: str) -> QLabel:
+def _make_status_label(title: str) -> QLabel:
     lbl = QLabel(f'  {title}: —  ')
     lbl.setFont(QFont('Monospace', 10))
     lbl.setAlignment(Qt.AlignCenter)
     lbl.setFixedHeight(26)
-    lbl.setStyleSheet(f'background-color: {_C_IDLE}; border-radius: 4px;')
+    lbl.setStyleSheet(f'background-color: {_C_OFF}; border-radius: 4px;')
     return lbl
 
 
-def _btn(text, color, text_color='white', height=32) -> QPushButton:
-    b = QPushButton(text)
-    b.setFixedHeight(height)
-    b.setStyleSheet(
+def _make_btn(text: str, color: str, text_color: str = 'white',
+              height: int = 32) -> QPushButton:
+    btn = QPushButton(text)
+    btn.setFixedHeight(height)
+    btn.setStyleSheet(
         f'background-color: {color}; color: {text_color}; font-weight: bold;')
-    return b
+    return btn
 
 
 # ---------------------------------------------------------------------------
@@ -190,8 +200,8 @@ class TeleopGuiWindow(QWidget):
 
     def __init__(self, ros_node: TeleopGuiNode, signals: Signals):
         super().__init__()
-        self._node = ros_node
-        self._sig  = signals
+        self._node      = ros_node
+        self._sig       = signals
         self._rec_state = 'IDLE'
 
         signals.pedal_updated.connect(self._on_pedal)
@@ -214,122 +224,113 @@ class TeleopGuiWindow(QWidget):
 
         root = QVBoxLayout()
         root.setSpacing(6)
-        root.addWidget(self._build_rby1_panel())
-        root.addWidget(self._build_teleop_section())
+        root.addWidget(self._build_rby1_group())
+        root.addWidget(self._build_teleop_group())
         self.setLayout(root)
 
-    # ── RB-Y1 panel ────────────────────────────────────────────────────────
+    # ── RB-Y1 group ────────────────────────────────────────────────────────
 
-    def _build_rby1_panel(self):
-        group  = QGroupBox('RB-Y1')
-        layout = QVBoxLayout()
-        layout.setSpacing(5)
-
-        layout.addLayout(self._build_rby1_status_row())
-        layout.addLayout(self._build_rby1_connect_row())
-        layout.addLayout(self._build_rby1_init_row())
-        layout.addLayout(self._build_rby1_pose_row())
-
-        group.setLayout(layout)
+    def _build_rby1_group(self) -> QGroupBox:
+        group = QGroupBox('RB-Y1')
+        vbox  = QVBoxLayout()
+        vbox.setSpacing(5)
+        vbox.addLayout(self._build_status_row())
+        vbox.addLayout(self._build_connect_row())
+        vbox.addLayout(self._build_init_row())
+        vbox.addLayout(self._build_pose_row())
+        group.setLayout(vbox)
         return group
 
-    def _build_rby1_status_row(self):
+    def _build_status_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
         row.setSpacing(6)
-
-        self._lbl_power   = _status_label('Power')
-        self._lbl_servo   = _status_label('Servo')
-        self._lbl_control = _status_label('Control')
-        self._lbl_stream  = _status_label('Stream')
-
-        for lbl in (self._lbl_power, self._lbl_servo,
-                    self._lbl_control, self._lbl_stream):
+        self._lbl_power   = _make_status_label('Power')
+        self._lbl_servo   = _make_status_label('Servo')
+        self._lbl_control = _make_status_label('Control')
+        self._lbl_stream  = _make_status_label('Stream')
+        self._lbl_gripper = _make_status_label('Gripper')
+        for lbl in (self._lbl_power, self._lbl_servo, self._lbl_control,
+                    self._lbl_stream, self._lbl_gripper):
             row.addWidget(lbl)
         return row
 
-    def _build_rby1_connect_row(self):
+    def _build_connect_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
         row.setSpacing(6)
 
         self._rb_sim  = QRadioButton('Sim')
         self._rb_real = QRadioButton('Real')
         self._rb_sim.setChecked(True)
-        conn_grp = QButtonGroup(self)
-        conn_grp.addButton(self._rb_sim,  0)
-        conn_grp.addButton(self._rb_real, 1)
-        conn_grp.idClicked.connect(self._on_sim_real_changed)
+        self._bg_conn = QButtonGroup(self)
+        self._bg_conn.addButton(self._rb_sim,  0)
+        self._bg_conn.addButton(self._rb_real, 1)
+        self._bg_conn.idClicked.connect(self._on_sim_real_changed)
 
-        self._ip_edit = QLineEdit('localhost:50051')
-        self._ip_edit.setFixedWidth(200)
+        self._le_ip = QLineEdit('localhost:50051')
+        self._le_ip.setFixedWidth(200)
 
-        btn_connect = _btn('Connect', '#1565C0', height=30)
-        btn_connect.setFixedWidth(90)
-        btn_connect.clicked.connect(self._on_connect)
+        self._chk_no_gripper = QCheckBox('No Gripper')
+        self._chk_no_gripper.setChecked(True)
+
+        self._btn_connect = _make_btn('Connect', '#1565C0', height=30)
+        self._btn_connect.setFixedWidth(90)
+        self._btn_connect.clicked.connect(self._on_connect)
 
         row.addWidget(self._rb_sim)
         row.addWidget(self._rb_real)
-        row.addWidget(self._ip_edit)
-        row.addWidget(btn_connect)
+        row.addWidget(self._le_ip)
+        row.addWidget(self._chk_no_gripper)
+        row.addWidget(self._btn_connect)
         row.addStretch()
         return row
 
-    def _build_rby1_init_row(self):
+    def _build_init_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
         row.setSpacing(5)
-
-        btns = [
-            ('Power On',      'power_on',      '#388E3C'),
-            ('Servo On',      'servo_on',      '#1976D2'),
-            ('Err Reset',     'error_reset',   '#F57C00'),
-            ('Ctrl Enable',   'control_enable','#7B1FA2'),
-            ('Gripper Init',  'gripper_init',  '#00838F'),
-        ]
-        for label, cmd, color in btns:
-            b = _btn(label, color, height=30)
-            b.clicked.connect(lambda _, c=cmd: self._node.publish_rby1_command(c))
-            row.addWidget(b)
+        for label, cmd, color in [
+            ('Power On',     'power_on',      '#388E3C'),
+            ('Servo On',     'servo_on',      '#1976D2'),
+            ('Err Reset',    'error_reset',   '#F57C00'),
+            ('Ctrl Enable',  'control_enable','#7B1FA2'),
+            ('Gripper Init', 'gripper_init',  '#00838F'),
+        ]:
+            btn = _make_btn(label, color, height=30)
+            btn.clicked.connect(lambda _, c=cmd: self._node.pub_rby1_cmd(c))
+            row.addWidget(btn)
         row.addStretch()
         return row
 
-    def _build_rby1_pose_row(self):
+    def _build_pose_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
         row.setSpacing(5)
-
-        btns = [
+        for label, cmd, color in [
             ('Power Off',  'power_off',  '#C62828'),
             ('Zero Pose',  'zero_pose',  '#546E7A'),
             ('Ready Pose', 'ready_pose', '#546E7A'),
             ('VLA Pose',   'vla_pose',   '#546E7A'),
             ('VLA2 Pose',  'vla_pose2',  '#546E7A'),
-        ]
-        for label, cmd, color in btns:
-            b = _btn(label, color, height=30)
-            b.clicked.connect(lambda _, c=cmd: self._node.publish_rby1_command(c))
-            row.addWidget(b)
-
-        # Stop Move — 긴 pause 없이 즉시 stream 종료
-        b_stop = _btn('⬛ Stop Move', '#B71C1C', height=30)
-        b_stop.clicked.connect(lambda: self._node.publish_rby1_command('stop_move'))
-        row.addWidget(b_stop)
+            ('⬛ Stop Move','stop_move',  '#B71C1C'),
+        ]:
+            btn = _make_btn(label, color, height=30)
+            btn.clicked.connect(lambda _, c=cmd: self._node.pub_rby1_cmd(c))
+            row.addWidget(btn)
         row.addStretch()
         return row
 
-    # ── Teleop section (bottom) ────────────────────────────────────────────
+    # ── Teleop group ───────────────────────────────────────────────────────
 
-    def _build_teleop_section(self):
-        group  = QGroupBox('Teleop')
-        layout = QHBoxLayout()
-        layout.setSpacing(8)
-
-        layout.addWidget(self._build_node_panel(), 2)
-        layout.addWidget(self._build_teleop_panel(), 2)
-        layout.addWidget(self._build_recording_panel(), 3)
-        layout.addWidget(self._build_calib_panel(), 2)
-
-        group.setLayout(layout)
+    def _build_teleop_group(self) -> QGroupBox:
+        group = QGroupBox('Teleop')
+        hbox  = QHBoxLayout()
+        hbox.setSpacing(8)
+        hbox.addWidget(self._build_nodes_panel(), 2)
+        hbox.addWidget(self._build_control_panel(), 2)
+        hbox.addWidget(self._build_recording_panel(), 3)
+        hbox.addWidget(self._build_calib_panel(), 2)
+        group.setLayout(hbox)
         return group
 
-    def _build_node_panel(self):
+    def _build_nodes_panel(self) -> QGroupBox:
         group = QGroupBox('Nodes')
         vbox  = QVBoxLayout()
         vbox.setSpacing(3)
@@ -345,16 +346,16 @@ class TeleopGuiWindow(QWidget):
             grid.addWidget(QLabel(pkg), i, 1)
             self._node_dots[node] = dot
 
-        # Tracker status
+        # Tracker status row
         n = len(NODES_TO_WATCH)
-        self._tracker_dot_l = QLabel('● L')
-        self._tracker_dot_r = QLabel('● R')
-        for dot in (self._tracker_dot_l, self._tracker_dot_r):
-            dot.setFont(QFont('Monospace', 10))
-            dot.setStyleSheet('color: #888;')
+        self._lbl_tracker_l = QLabel('● L')
+        self._lbl_tracker_r = QLabel('● R')
+        for lbl in (self._lbl_tracker_l, self._lbl_tracker_r):
+            lbl.setFont(QFont('Monospace', 10))
+            lbl.setStyleSheet('color: #888;')
         tr_row = QHBoxLayout()
-        tr_row.addWidget(self._tracker_dot_l)
-        tr_row.addWidget(self._tracker_dot_r)
+        tr_row.addWidget(self._lbl_tracker_l)
+        tr_row.addWidget(self._lbl_tracker_r)
         tr_row.addStretch()
         tr_widget = QWidget()
         tr_widget.setLayout(tr_row)
@@ -368,266 +369,253 @@ class TeleopGuiWindow(QWidget):
         group.setLayout(vbox)
         return group
 
-    def _build_pedal_panel(self):
-        group  = QGroupBox('Pedal')
-        layout = QHBoxLayout()
-        self._pedal_btns = []
+    def _build_pedal_panel(self) -> QGroupBox:
+        group = QGroupBox('Pedal')
+        hbox  = QHBoxLayout()
+        self._btn_pedals = []
         for label in ['Resume/Pause', '—', '● Rec']:
             btn = QPushButton(label)
             btn.setEnabled(False)
             btn.setFixedHeight(32)
             btn.setStyleSheet('background-color: #ccc; color: #444;')
-            layout.addWidget(btn)
-            self._pedal_btns.append(btn)
-        group.setLayout(layout)
+            hbox.addWidget(btn)
+            self._btn_pedals.append(btn)
+        group.setLayout(hbox)
         return group
 
-    def _build_teleop_panel(self):
-        group  = QGroupBox('Control')
-        layout = QVBoxLayout()
-        layout.setSpacing(5)
+    def _build_control_panel(self) -> QGroupBox:
+        group = QGroupBox('Control')
+        vbox  = QVBoxLayout()
+        vbox.setSpacing(5)
 
-        # Teleop action buttons
-        for label, cmd, bg in [
+        for label, cmd, color in [
             ('▶  Teleop Start', 'teleop_start', '#4CAF50'),
             ('VLA2 Pose',       'vla_pose2',    '#5C6BC0'),
             ('■  Teleop Stop',  'teleop_stop',  '#E53935'),
         ]:
-            b = _btn(label, bg, height=34)
-            b.clicked.connect(lambda _, c=cmd: self._node.publish_rby1_command(c))
-            layout.addWidget(b)
+            btn = _make_btn(label, color, height=34)
+            btn.clicked.connect(lambda _, c=cmd: self._node.pub_rby1_cmd(c))
+            vbox.addWidget(btn)
 
-        layout.addSpacing(4)
+        vbox.addSpacing(4)
 
-        # Control mode
         mode_row = QHBoxLayout()
         mode_row.addWidget(QLabel('Mode'))
-        self._radio_position  = QRadioButton('Position')
-        self._radio_impedance = QRadioButton('Impedance')
-        self._radio_position.setChecked(True)
-        self._mode_group = QButtonGroup()
-        self._mode_group.addButton(self._radio_position,  0)
-        self._mode_group.addButton(self._radio_impedance, 1)
-        self._mode_group.idClicked.connect(self._on_control_mode_changed)
-        mode_row.addWidget(self._radio_position)
-        mode_row.addWidget(self._radio_impedance)
+        self._rb_mode_position  = QRadioButton('Position')
+        self._rb_mode_impedance = QRadioButton('Impedance')
+        self._rb_mode_position.setChecked(True)
+        self._bg_mode = QButtonGroup()
+        self._bg_mode.addButton(self._rb_mode_position,  0)
+        self._bg_mode.addButton(self._rb_mode_impedance, 1)
+        self._bg_mode.idClicked.connect(self._on_control_mode_changed)
+        mode_row.addWidget(self._rb_mode_position)
+        mode_row.addWidget(self._rb_mode_impedance)
         mode_row.addStretch()
-        layout.addLayout(mode_row)
+        vbox.addLayout(mode_row)
 
-        # Mirror mode
         mirror_row = QHBoxLayout()
         mirror_row.addWidget(QLabel('Tracking'))
-        self._radio_normal = QRadioButton('Normal')
-        self._radio_mirror = QRadioButton('Mirror')
-        self._radio_normal.setChecked(True)
-        self._mirror_group = QButtonGroup()
-        self._mirror_group.addButton(self._radio_normal, 0)
-        self._mirror_group.addButton(self._radio_mirror, 1)
-        self._mirror_group.idClicked.connect(self._on_mirror_mode_changed)
-        mirror_row.addWidget(self._radio_normal)
-        mirror_row.addWidget(self._radio_mirror)
+        self._rb_track_normal = QRadioButton('Normal')
+        self._rb_track_mirror = QRadioButton('Mirror')
+        self._rb_track_normal.setChecked(True)
+        self._bg_track = QButtonGroup()
+        self._bg_track.addButton(self._rb_track_normal, 0)
+        self._bg_track.addButton(self._rb_track_mirror, 1)
+        self._bg_track.idClicked.connect(self._on_mirror_mode_changed)
+        mirror_row.addWidget(self._rb_track_normal)
+        mirror_row.addWidget(self._rb_track_mirror)
         mirror_row.addStretch()
-        layout.addLayout(mirror_row)
+        vbox.addLayout(mirror_row)
 
-        layout.addStretch()
-        group.setLayout(layout)
+        vbox.addStretch()
+        group.setLayout(vbox)
         return group
 
-    def _build_recording_panel(self):
-        group  = QGroupBox('Recording')
-        layout = QVBoxLayout()
-        layout.setSpacing(5)
+    def _build_recording_panel(self) -> QGroupBox:
+        group = QGroupBox('Recording')
+        vbox  = QVBoxLayout()
+        vbox.setSpacing(5)
 
-        self._rec_state_label = QLabel('⬤ IDLE')
-        self._rec_state_label.setFont(QFont('Monospace', 12))
-        self._rec_state_label.setStyleSheet('color: #888;')
+        self._lbl_rec_state = QLabel('⬤ IDLE')
+        self._lbl_rec_state.setFont(QFont('Monospace', 12))
+        self._lbl_rec_state.setStyleSheet('color: #888;')
+
+        self._timer_rec_countdown = QTimer()
+        self._timer_rec_countdown.timeout.connect(self._tick_countdown)
         self._rec_countdown = 0
-        self._rec_countdown_timer = QTimer()
-        self._rec_countdown_timer.timeout.connect(self._tick_countdown)
 
         task_row = QHBoxLayout()
         task_row.addWidget(QLabel('task_id'))
-        self._task_spin = QSpinBox()
-        self._task_spin.setMinimum(0)
-        self._task_spin.setMaximum(9999)
-        self._task_spin.setFixedWidth(70)
-        self._task_spin.valueChanged.connect(self._on_task_id_changed)
-        task_row.addWidget(self._task_spin)
+        self._spin_task = QSpinBox()
+        self._spin_task.setMinimum(0)
+        self._spin_task.setMaximum(9999)
+        self._spin_task.setFixedWidth(70)
+        self._spin_task.valueChanged.connect(
+            lambda v: self._node.pub_task_id(v))
+        task_row.addWidget(self._spin_task)
         task_row.addStretch()
 
         ep_row = QHBoxLayout()
         ep_row.addWidget(QLabel('episode'))
-        self._ep_label = QLabel('—')
-        self._ep_label.setFont(QFont('Monospace', 11))
-        ep_row.addWidget(self._ep_label)
+        self._lbl_episode = QLabel('—')
+        self._lbl_episode.setFont(QFont('Monospace', 11))
+        ep_row.addWidget(self._lbl_episode)
         ep_row.addStretch()
 
-        self._rec_btn = QPushButton('▶  Start Episode')
-        self._rec_btn.setFixedHeight(36)
-        self._rec_btn.setStyleSheet(
-            'background-color: #4CAF50; color: white; font-weight: bold;')
-        self._rec_btn.clicked.connect(self._on_rec_btn)
+        self._btn_rec = _make_btn('▶  Start Episode', '#4CAF50', height=36)
+        self._btn_rec.clicked.connect(self._on_rec_btn)
 
-        layout.addWidget(self._rec_state_label)
-        layout.addLayout(task_row)
-        layout.addLayout(ep_row)
-        layout.addWidget(self._rec_btn)
-        layout.addStretch()
-        group.setLayout(layout)
+        vbox.addWidget(self._lbl_rec_state)
+        vbox.addLayout(task_row)
+        vbox.addLayout(ep_row)
+        vbox.addWidget(self._btn_rec)
+        vbox.addStretch()
+        group.setLayout(vbox)
         return group
 
-    def _build_calib_panel(self):
-        group  = QGroupBox('Manus Calibration')
-        layout = QVBoxLayout()
-        self._calib_label = QLabel('Status: READY')
-        self._calib_bar   = QProgressBar()
-        self._calib_bar.setRange(0, 100)
-        self._calib_bar.setValue(0)
-        self._calib_bar.setVisible(False)
-        self._calib_btn   = QPushButton('Recalibrate')
-        self._calib_btn.setFixedHeight(36)
-        self._calib_btn.clicked.connect(self._on_recalibrate)
-        layout.addWidget(self._calib_label)
-        layout.addWidget(self._calib_bar)
-        layout.addWidget(self._calib_btn)
-        layout.addStretch()
-        group.setLayout(layout)
+    def _build_calib_panel(self) -> QGroupBox:
+        group = QGroupBox('Manus Calibration')
+        vbox  = QVBoxLayout()
+        self._lbl_calib = QLabel('Status: READY')
+        self._pbar_calib = QProgressBar()
+        self._pbar_calib.setRange(0, 100)
+        self._pbar_calib.setValue(0)
+        self._pbar_calib.setVisible(False)
+        self._btn_calib = QPushButton('Recalibrate')
+        self._btn_calib.setFixedHeight(36)
+        self._btn_calib.clicked.connect(self._on_recalibrate)
+        vbox.addWidget(self._lbl_calib)
+        vbox.addWidget(self._pbar_calib)
+        vbox.addWidget(self._btn_calib)
+        vbox.addStretch()
+        group.setLayout(vbox)
         return group
 
     # ── Signal handlers ────────────────────────────────────────────────────
 
-    def _on_sim_real_changed(self, btn_id):
-        if btn_id == 0:
-            self._ip_edit.setText('localhost:50051')
-        else:
-            self._ip_edit.setText('192.168.30.1:50051')
+    def _on_sim_real_changed(self, btn_id: int):
+        self._le_ip.setText(
+            'localhost:50051' if btn_id == 0 else '192.168.30.1:50051')
 
     def _on_connect(self):
-        ip = self._ip_edit.text().strip()
-        self._node.publish_rby1_command(f'connect\n{ip}')
+        cmd = f'connect\n{self._le_ip.text().strip()}'
+        if self._chk_no_gripper.isChecked():
+            cmd += '\nno_gripper'
+        self._node.pub_rby1_cmd(cmd)
 
     def _on_rby1_status(self, data: dict):
         power   = data.get('power_state',   'False') == 'True'
         servo   = data.get('servo_state',   'False') == 'True'
         stream  = data.get('stream_state',  'False') == 'True'
+        gripper = data.get('gripper_state', 'False') == 'True'
         ctrl    = data.get('control_state', '')
 
-        def _apply(lbl, text, color):
+        def _set(lbl, text, color):
             lbl.setText(f'  {text}  ')
             lbl.setStyleSheet(f'background-color: {color}; border-radius: 4px;')
 
-        _apply(self._lbl_power,
-               'Power On'  if power  else 'Power Off',
-               _C_ON       if power  else _C_IDLE)
-
-        _apply(self._lbl_servo,
-               'Servo On'  if servo  else 'Servo Off',
-               _C_ON       if servo  else _C_IDLE)
+        _set(self._lbl_power,   'Power On'  if power   else 'Power Off',  _C_ON if power   else _C_OFF)
+        _set(self._lbl_servo,   'Servo On'  if servo   else 'Servo Off',  _C_ON if servo   else _C_OFF)
+        _set(self._lbl_stream,  'Stream On' if stream  else 'Stream Off', _C_ON if stream  else _C_OFF)
+        _set(self._lbl_gripper, 'Gripper ✓' if gripper else 'Gripper ✗',  _C_ON if gripper else _C_OFF)
 
         if ctrl == 'State.Enabled':
-            _apply(self._lbl_control, 'Enabled', _C_ON)
+            _set(self._lbl_control, 'Enabled', _C_ON)
         elif 'Fault' in ctrl:
-            _apply(self._lbl_control, 'FAULT', _C_FAULT)
+            _set(self._lbl_control, 'FAULT', _C_FAULT)
         else:
-            _apply(self._lbl_control, 'Idle', _C_IDLE)
+            _set(self._lbl_control, 'Idle', _C_OFF)
 
-        _apply(self._lbl_stream,
-               'Stream On' if stream else 'Stream Off',
-               _C_ON       if stream else _C_IDLE)
-
-    def _on_pedal(self, state):
-        for btn, pressed in zip(self._pedal_btns, state):
+    def _on_pedal(self, state: list):
+        for btn, pressed in zip(self._btn_pedals, state):
             color = '#A6D256' if pressed else '#ccc'
             btn.setStyleSheet(f'background-color: {color}; color: #333;')
 
-    def _on_nodes(self, status):
+    def _on_nodes(self, status: dict):
         for node, alive in status.items():
             if node in self._node_dots:
                 color = '#A6D256' if alive else '#ED325A'
                 self._node_dots[node].setStyleSheet(f'color: {color};')
 
-    def _on_tracker_status(self, sl, sr):
+    def _on_tracker_status(self, sl: str, sr: str):
         _colors = {'OK': '#4CAF50', 'JITTER': '#F0C040', 'LOST': '#E0302A'}
-        self._tracker_dot_l.setStyleSheet(f'color: {_colors.get(sl, "#888")};')
-        self._tracker_dot_r.setStyleSheet(f'color: {_colors.get(sr, "#888")};')
+        self._lbl_tracker_l.setStyleSheet(f'color: {_colors.get(sl, "#888")};')
+        self._lbl_tracker_r.setStyleSheet(f'color: {_colors.get(sr, "#888")};')
 
-    def _on_rec_state(self, state):
-        prev_state = self._rec_state
+    def _on_rec_state(self, state: str):
+        prev            = self._rec_state
         self._rec_state = state
-        text, color = REC_STATE_STYLE.get(state, ('⬤ ' + state, '#888'))
-        self._rec_state_label.setText(text)
-        self._rec_state_label.setStyleSheet(f'color: {color};')
+        text, color     = REC_STATE_STYLE.get(state, ('⬤ ' + state, '#888'))
+        self._lbl_rec_state.setText(text)
+        self._lbl_rec_state.setStyleSheet(f'color: {color};')
 
         is_idle = (state == 'IDLE')
-        self._task_spin.setEnabled(is_idle)
-        self._radio_position.setEnabled(is_idle)
-        self._radio_impedance.setEnabled(is_idle)
-        self._radio_normal.setEnabled(is_idle)
-        self._radio_mirror.setEnabled(is_idle)
+        for w in (self._spin_task,
+                  self._rb_mode_position, self._rb_mode_impedance,
+                  self._rb_track_normal,  self._rb_track_mirror):
+            w.setEnabled(is_idle)
 
         if is_idle:
-            self._rec_countdown_timer.stop()
-            self._rec_btn.setText('▶  Start Episode')
-            self._rec_btn.setStyleSheet(
+            self._timer_rec_countdown.stop()
+            self._btn_rec.setText('▶  Start Episode')
+            self._btn_rec.setStyleSheet(
                 'background-color: #4CAF50; color: white; font-weight: bold;')
-            self._rec_btn.setEnabled(True)
-            self._ep_label.setText('—')
-        elif prev_state == 'IDLE' and state == 'READY':
-            self._rec_btn.setText('Starting in 3...')
-            self._rec_btn.setStyleSheet(
+            self._btn_rec.setEnabled(True)
+            self._lbl_episode.setText('—')
+        elif prev == 'IDLE' and state == 'READY':
+            self._btn_rec.setText('Starting in 3...')
+            self._btn_rec.setStyleSheet(
                 'background-color: #888; color: white; font-weight: bold;')
-            self._rec_btn.setEnabled(False)
+            self._btn_rec.setEnabled(False)
             self._rec_countdown = 3
-            self._rec_countdown_timer.start(1000)
+            self._timer_rec_countdown.start(1000)
         else:
-            self._rec_btn.setText('■  End Episode')
-            self._rec_btn.setStyleSheet(
+            self._btn_rec.setText('■  End Episode')
+            self._btn_rec.setStyleSheet(
                 'background-color: #E53935; color: white; font-weight: bold;')
-            self._rec_btn.setEnabled(state in ('READY', 'PAUSED'))
+            self._btn_rec.setEnabled(state in ('READY', 'PAUSED'))
 
     def _tick_countdown(self):
         self._rec_countdown -= 1
         if self._rec_countdown > 0:
-            self._rec_btn.setText(f'Starting in {self._rec_countdown}...')
+            self._btn_rec.setText(f'Starting in {self._rec_countdown}...')
         else:
-            self._rec_countdown_timer.stop()
-            self._rec_btn.setText('■  End Episode')
-            self._rec_btn.setStyleSheet(
+            self._timer_rec_countdown.stop()
+            self._btn_rec.setText('■  End Episode')
+            self._btn_rec.setStyleSheet(
                 'background-color: #E53935; color: white; font-weight: bold;')
-            self._rec_btn.setEnabled(True)
+            self._btn_rec.setEnabled(True)
 
-    def _on_rec_episode(self, episode):
-        self._ep_label.setText(str(episode) if episode >= 0 else '—')
+    def _on_rec_episode(self, episode: int):
+        self._lbl_episode.setText(str(episode) if episode >= 0 else '—')
 
-    def _on_task_id_changed(self, index):
-        self._node.publish_task_id(index)
+    def _on_control_mode_changed(self, btn_id: int):
+        self._node.pub_control_mode('impedance' if btn_id == 1 else 'position')
 
-    def _on_control_mode_changed(self, button_id):
-        self._node.publish_control_mode('impedance' if button_id == 1 else 'position')
-
-    def _on_mirror_mode_changed(self, button_id):
-        self._node.publish_mirror_mode(button_id == 1)
+    def _on_mirror_mode_changed(self, btn_id: int):
+        self._node.pub_mirror_mode(btn_id == 1)
 
     def _on_rec_btn(self):
-        self._rec_btn.setEnabled(False)
-        def done(success, msg):
-            self._rec_btn.setEnabled(True)
+        self._btn_rec.setEnabled(False)
         threading.Thread(
-            target=self._node.call_toggle_episode, args=(done,), daemon=True).start()
+            target=self._node.call_toggle_episode,
+            args=(lambda ok, _: self._btn_rec.setEnabled(True),),
+            daemon=True,
+        ).start()
 
     # ── Calibration ────────────────────────────────────────────────────────
 
-    def _on_calib_status(self, text):
-        self._calib_label.setText(f'Status: {text}')
+    def _on_calib_status(self, text: str):
+        self._lbl_calib.setText(f'Status: {text}')
 
     def _on_recalibrate(self):
-        self._calib_btn.setEnabled(False)
-        self._calib_bar.setVisible(True)
-        self._calib_bar.setValue(0)
+        self._btn_calib.setEnabled(False)
+        self._pbar_calib.setVisible(True)
+        self._pbar_calib.setValue(0)
         self._sig.calib_status.emit('Calling service...')
 
-        def done(success, msg):
-            if not success:
+        def done(ok, msg):
+            if not ok:
                 self._sig.calib_failed.emit(f'FAILED: {msg}')
             else:
                 self._sig.calib_started.emit()
@@ -635,9 +623,9 @@ class TeleopGuiWindow(QWidget):
         threading.Thread(
             target=self._node.call_calibrate, args=(done,), daemon=True).start()
 
-    def _on_calib_failed(self, msg):
+    def _on_calib_failed(self, msg: str):
         self._sig.calib_status.emit(msg)
-        self._calib_btn.setEnabled(True)
+        self._btn_calib.setEnabled(True)
 
     _CALIB_PHASE_MSGS = {
         1: 'Phase 1/4: Open hands fully...',
@@ -650,15 +638,15 @@ class TeleopGuiWindow(QWidget):
         self._calib_elapsed = 0.0
         self._calib_phase   = 1
         self._sig.calib_status.emit(self._CALIB_PHASE_MSGS[1])
-        self._calib_tick_timer = QTimer()
-        self._calib_tick_timer.timeout.connect(self._tick_calib)
-        self._calib_tick_timer.start(100)
+        self._timer_calib = QTimer()
+        self._timer_calib.timeout.connect(self._tick_calib)
+        self._timer_calib.start(100)
 
     def _tick_calib(self):
         self._calib_elapsed += 0.1
-        done_phases = (self._calib_phase - 1) * CALIB_DURATION
-        pct = int((done_phases + self._calib_elapsed) / (CALIB_DURATION * 4) * 100)
-        self._calib_bar.setValue(min(pct, 100))
+        pct = int(((self._calib_phase - 1) * CALIB_DURATION + self._calib_elapsed)
+                  / (CALIB_DURATION * 4) * 100)
+        self._pbar_calib.setValue(min(pct, 100))
 
         if self._calib_elapsed >= CALIB_DURATION:
             self._calib_elapsed = 0.0
@@ -666,10 +654,10 @@ class TeleopGuiWindow(QWidget):
                 self._calib_phase += 1
                 self._sig.calib_status.emit(self._CALIB_PHASE_MSGS[self._calib_phase])
             else:
-                self._calib_tick_timer.stop()
-                self._calib_bar.setValue(100)
+                self._timer_calib.stop()
+                self._pbar_calib.setValue(100)
                 self._sig.calib_status.emit('COMPLETE')
-                self._calib_btn.setEnabled(True)
+                self._btn_calib.setEnabled(True)
 
 
 # ---------------------------------------------------------------------------
