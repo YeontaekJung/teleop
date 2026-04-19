@@ -400,19 +400,33 @@ class TeleopGuiWindow(QWidget):
 
         vbox.addSpacing(4)
 
-        mode_row = QHBoxLayout()
-        mode_row.addWidget(QLabel('Mode'))
-        self._rb_mode_position  = QRadioButton('Position')
-        self._rb_mode_impedance = QRadioButton('Impedance')
-        self._rb_mode_position.setChecked(True)
-        self._bg_mode = QButtonGroup()
-        self._bg_mode.addButton(self._rb_mode_position,  0)
-        self._bg_mode.addButton(self._rb_mode_impedance, 1)
-        self._bg_mode.idClicked.connect(self._on_control_mode_changed)
-        mode_row.addWidget(self._rb_mode_position)
-        mode_row.addWidget(self._rb_mode_impedance)
-        mode_row.addStretch()
-        vbox.addLayout(mode_row)
+        ik_row = QHBoxLayout()
+        ik_row.addWidget(QLabel('IK'))
+        self._rb_ik_sdk  = QRadioButton('SDK')
+        self._rb_ik_pink = QRadioButton('Pink')
+        self._rb_ik_sdk.setChecked(True)
+        self._bg_ik = QButtonGroup()
+        self._bg_ik.addButton(self._rb_ik_sdk,  0)
+        self._bg_ik.addButton(self._rb_ik_pink, 1)
+        self._bg_ik.idClicked.connect(self._on_ik_mode_changed)
+        ik_row.addWidget(self._rb_ik_sdk)
+        ik_row.addWidget(self._rb_ik_pink)
+        ik_row.addStretch()
+        vbox.addLayout(ik_row)
+
+        ctrl_row = QHBoxLayout()
+        ctrl_row.addWidget(QLabel('Ctrl'))
+        self._rb_ctrl_position  = QRadioButton('Position')
+        self._rb_ctrl_impedance = QRadioButton('Impedance')
+        self._rb_ctrl_position.setChecked(True)
+        self._bg_ctrl = QButtonGroup()
+        self._bg_ctrl.addButton(self._rb_ctrl_position,  0)
+        self._bg_ctrl.addButton(self._rb_ctrl_impedance, 1)
+        self._bg_ctrl.idClicked.connect(self._on_ctrl_mode_changed)
+        ctrl_row.addWidget(self._rb_ctrl_position)
+        ctrl_row.addWidget(self._rb_ctrl_impedance)
+        ctrl_row.addStretch()
+        vbox.addLayout(ctrl_row)
 
         mirror_row = QHBoxLayout()
         mirror_row.addWidget(QLabel('Tracking'))
@@ -572,8 +586,9 @@ class TeleopGuiWindow(QWidget):
 
         is_idle = (state == 'IDLE')
         for w in (self._spin_task,
-                  self._rb_mode_position, self._rb_mode_impedance,
-                  self._rb_track_normal,  self._rb_track_mirror):
+                  self._rb_ik_sdk, self._rb_ik_pink,
+                  self._rb_ctrl_position, self._rb_ctrl_impedance,
+                  self._rb_track_normal, self._rb_track_mirror):
             w.setEnabled(is_idle)
 
         if is_idle:
@@ -610,8 +625,16 @@ class TeleopGuiWindow(QWidget):
     def _on_rec_episode(self, episode: int):
         self._lbl_episode.setText(str(episode) if episode >= 0 else '—')
 
-    def _on_control_mode_changed(self, btn_id: int):
-        self._node.pub_control_mode('impedance' if btn_id == 1 else 'position')
+    def _on_ik_mode_changed(self, _btn_id: int):
+        self._pub_combined_mode()
+
+    def _on_ctrl_mode_changed(self, _btn_id: int):
+        self._pub_combined_mode()
+
+    def _pub_combined_mode(self):
+        ik   = 'sdk'  if self._bg_ik.checkedId()   == 0 else 'pink'
+        ctrl = 'position' if self._bg_ctrl.checkedId() == 0 else 'impedance'
+        self._node.pub_control_mode(f'{ik}_{ctrl}')
 
     def _on_mirror_mode_changed(self, btn_id: int):
         self._node.pub_mirror_mode(btn_id == 1)

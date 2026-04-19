@@ -52,7 +52,7 @@ from scipy.spatial.transform import Rotation as R, Slerp
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, PoseArray, Pose
 from sensor_msgs.msg import Joy, JointState
 from std_msgs.msg import Int32, String
 from std_srvs.srv import Trigger
@@ -82,6 +82,19 @@ def pose_stamped_to_SE3(msg: PoseStamped) -> pin.SE3:
     q = msg.pose.orientation
     rot = R.from_quat([q.x, q.y, q.z, q.w]).as_matrix()
     return pin.SE3(rot, np.array([p.x, p.y, p.z]))
+
+
+def se3_to_pose(se3: pin.SE3) -> Pose:
+    pose = Pose()
+    pose.position.x = float(se3.translation[0])
+    pose.position.y = float(se3.translation[1])
+    pose.position.z = float(se3.translation[2])
+    q = R.from_matrix(se3.rotation).as_quat()
+    pose.orientation.x = float(q[0])
+    pose.orientation.y = float(q[1])
+    pose.orientation.z = float(q[2])
+    pose.orientation.w = float(q[3])
+    return pose
 
 
 def se3_to_pose_stamped(se3: pin.SE3, frame_id='world') -> PoseStamped:
@@ -179,9 +192,9 @@ class ViveRby1Node(Node):
         self._rec_episode = -1
         self._rec_task_id = 0
 
-        # Control mode: False = position, True = impedance
-        self._use_impedance = False
-        self._mirror_mode   = False  # True = facing operator (L/R swap + Y flip)
+        # IK mode: 'pink_position' | 'pink_impedance' | 'sdk_position' | 'sdk_impedance'
+        self._ik_mode     = 'pink_position'
+        self._mirror_mode = False  # True = facing operator (L/R swap + Y flip)
         self._warmup_ticks  = 0   # countdown for pre-engage hold publish
         self._teleop_active = False  # True once teleop_start / impedance_teleop_start is sent
 
@@ -198,6 +211,7 @@ class ViveRby1Node(Node):
         # Publishers
         self._pub_cmd           = self.create_publisher(JointGroupCommand, topic_cmd,                          10)
         self._pub_impedance_cmd = self.create_publisher(JointGroupCommand, '/rby1_impedance_teleop_command',   10)
+        self._pub_sdk_target    = self.create_publisher(PoseArray,         '/rby1_sdk_teleop_command',         10)
         self._pub_rec_state     = self.create_publisher(String,            '/teleop/rec_state',                10)
         self._pub_rec_ep        = self.create_publisher(Int32,             '/teleop/rec_episode',              10)
         self._pub_tracker_status = self.create_publisher(String,           '/teleop/tracker_status',           10)
@@ -268,8 +282,8 @@ class ViveRby1Node(Node):
         self._rec_task_id = msg.data
 
     def _cb_control_mode(self, msg: String):
-        self._use_impedance = (msg.data == 'impedance')
-        self.get_logger().info(f'[vive_rby1] control mode → {msg.data}')
+        self._ik_mode = msg.data
+        self.get_logger().info(f'[vive_rby1] IK mode → {msg.data}')
 
     def _cb_mirror_mode(self, msg: String):
         self._mirror_mode = (msg.data == 'mirror')
@@ -277,8 +291,12 @@ class ViveRby1Node(Node):
 
     def _cb_rby1_command(self, msg: String):
         cmd = msg.data
-        if cmd == 'teleop_start' and self._use_impedance:
-            cmd = 'impedance_teleop_start'
+        if cmd == 'teleop_start':
+            cmd = {
+                'pink_impedance': 'impedance_teleop_start',
+                'sdk_position':   'sdk_position_teleop_start',
+                'sdk_impedance':  'sdk_impedance_teleop_start',
+            }.get(self._ik_mode, 'teleop_start')
         self._send_rby1_command(cmd)
 
     def _cb_pedal(self, _msg: Joy):
@@ -382,8 +400,12 @@ class ViveRby1Node(Node):
             self.get_logger().info(
                 f'[vive_rby1] READY — task {result.task_id} ep {result.episode_id}')
             self._warmup_ticks = int(self._publish_rate)
-            start_cmd = 'impedance_teleop_start' if self._use_impedance else 'teleop_start'
-            self._send_rby1_command('vla_pose2', then=start_cmd)
+            start_cmd = {
+                'pink_impedance': 'impedance_teleop_start',
+                'sdk_position':   'sdk_position_teleop_start',
+                'sdk_impedance':  'sdk_impedance_teleop_start',
+            }.get(self._ik_mode, 'teleop_start')
+            self._send_rby1_command('ready_pose', then=start_cmd)
         else:
             self.get_logger().error(f'StartRecording failed: {result.message}')
         self._publish_rec_state()
@@ -394,8 +416,8 @@ class ViveRby1Node(Node):
             self._rec_state   = REC_IDLE
             self._rec_episode = -1
             self._engaged     = False
-            self.get_logger().info('[vive_rby1] Recording ENDED — teleop_stop → vla_pose2')
-            self._send_rby1_command('teleop_stop', then='vla_pose2')
+            self.get_logger().info('[vive_rby1] Recording ENDED — teleop_stop → ready_pose')
+            self._send_rby1_command('teleop_stop', then='ready_pose')
         else:
             self.get_logger().error(f'EndRecording failed: {result.message}')
         self._publish_rec_state()
@@ -429,7 +451,8 @@ class ViveRby1Node(Node):
             def _on_result(result_future):
                 result = result_future.result()
                 succeeded = (result.status == 4)  # GoalStatus.STATUS_SUCCEEDED = 4
-                if command in ('teleop_start', 'impedance_teleop_start'):
+                if command in ('teleop_start', 'impedance_teleop_start',
+                               'sdk_position_teleop_start', 'sdk_impedance_teleop_start'):
                     if succeeded:
                         self._teleop_active = True
                     else:
@@ -479,10 +502,11 @@ class ViveRby1Node(Node):
         sr = self._tracker_status(self._tracker_buf_r, self._tracker_stamp_r)
         self._pub_tracker_status.publish(String(data=f'L:{sl} R:{sr}'))
 
-        # Warm-up: publish current joint state so SDK auto-detects the topic
+        # Warm-up: pink 모드만 joint 명령 pre-publish (SDK 모드는 /rby1_sdk_teleop_command 사용)
         if self._warmup_ticks > 0:
             self._warmup_ticks -= 1
-            self._publish_q20(self._ik.current_q20)
+            if not self._ik_mode.startswith('sdk_'):
+                self._publish_q20(self._ik.current_q20)
             return
 
         if self._tracker_l is None or self._tracker_r is None:
@@ -532,18 +556,25 @@ class ViveRby1Node(Node):
         target_rot_l = dR_l_robot @ self._ee_l_0.rotation
         target_rot_r = dR_r_robot @ self._ee_r_0.rotation
 
-        q20 = self._ik.solve_ik_to_q20(
-            pin.SE3(target_rot_l, target_pos_l),
-            pin.SE3(target_rot_r, target_pos_r),
-            self._ik_dt)
+        l_SE3 = pin.SE3(target_rot_l, target_pos_l)
+        r_SE3 = pin.SE3(target_rot_r, target_pos_r)
 
-        self._publish_q20(q20)
+        if self._ik_mode.startswith('sdk_'):
+            pa = PoseArray()
+            pa.header.frame_id = 'base'
+            pa.header.stamp = self.get_clock().now().to_msg()
+            pa.poses.append(se3_to_pose(r_SE3))
+            pa.poses.append(se3_to_pose(l_SE3))
+            self._pub_sdk_target.publish(pa)
+        else:
+            q20 = self._ik.solve_ik_to_q20(l_SE3, r_SE3, self._ik_dt)
+            self._publish_q20(q20)
 
     def _publish_q20(self, q20: np.ndarray):
         cmd = JointGroupCommand()
         cmd.name = 'All'
         cmd.cmd  = np.concatenate((q20, np.array([0., 0.]))).tolist()
-        if self._use_impedance:
+        if self._ik_mode == 'pink_impedance':
             self._pub_impedance_cmd.publish(cmd)
         else:
             self._pub_cmd.publish(cmd)
