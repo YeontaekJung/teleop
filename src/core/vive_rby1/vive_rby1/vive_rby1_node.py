@@ -288,6 +288,15 @@ class ViveRby1Node(Node):
     def _cb_mirror_mode(self, msg: String):
         self._mirror_mode = (msg.data == 'mirror')
         self.get_logger().info(f'[vive_rby1] mirror mode → {self._mirror_mode}')
+        # 토글 시 reference 리셋 — 갑작스러운 target jump 방지
+        if self._engaged:
+            self._ref_l = self._tracker_l_se3
+            self._ref_r = self._tracker_r_se3
+            q_pin = self._ik.configuration.q
+            fid_l = self._ik.robot.model.getFrameId('tracker_left')
+            fid_r = self._ik.robot.model.getFrameId('tracker_right')
+            self._ee_l_0 = self._ik.robot.framePlacement(q_pin, fid_l)
+            self._ee_r_0 = self._ik.robot.framePlacement(q_pin, fid_r)
 
     def _cb_rby1_command(self, msg: String):
         cmd = msg.data

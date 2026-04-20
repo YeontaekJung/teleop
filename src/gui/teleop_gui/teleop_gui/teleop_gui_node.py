@@ -52,9 +52,10 @@ REC_STATE_STYLE = {
     'PAUSED':    ('⬤ PAUSED',    '#E08020'),
 }
 
-_C_ON    = '#A6D256'
-_C_OFF   = 'lightgray'
-_C_FAULT = '#ED325A'
+_C_ON      = '#A6D256'
+_C_OFF     = 'lightgray'
+_C_OFF_RED = '#E53935'
+_C_FAULT   = '#ED325A'
 
 
 # ---------------------------------------------------------------------------
@@ -405,14 +406,16 @@ class TeleopGuiWindow(QWidget):
         vbox  = QVBoxLayout()
         vbox.setSpacing(5)
 
+        teleop_row = QHBoxLayout()
+        teleop_row.setSpacing(5)
         for label, cmd, color in [
             ('▶  Teleop Start', 'teleop_start', '#4CAF50'),
-            ('VLA2 Pose',       'vla_pose2',    '#5C6BC0'),
             ('■  Teleop Stop',  'teleop_stop',  '#E53935'),
         ]:
             btn = _make_btn(label, color, height=34)
             btn.clicked.connect(lambda _, c=cmd: self._node.pub_rby1_cmd(c))
-            vbox.addWidget(btn)
+            teleop_row.addWidget(btn)
+        vbox.addLayout(teleop_row)
 
         vbox.addSpacing(4)
 
@@ -545,9 +548,9 @@ class TeleopGuiWindow(QWidget):
             lbl.setText(f'  {text}  ')
             lbl.setStyleSheet(f'background-color: {color}; border-radius: 4px;')
 
-        _set(self._lbl_power,   'Power On'  if power   else 'Power Off',  _C_ON if power   else _C_OFF)
-        _set(self._lbl_servo,   'Servo On'  if servo   else 'Servo Off',  _C_ON if servo   else _C_OFF)
-        _set(self._lbl_stream,  'Stream On' if stream  else 'Stream Off', _C_ON if stream  else _C_OFF)
+        _set(self._lbl_power,   'Power On'  if power   else 'Power Off',  _C_ON if power   else _C_OFF_RED)
+        _set(self._lbl_servo,   'Servo On'  if servo   else 'Servo Off',  _C_ON if servo   else _C_OFF_RED)
+        _set(self._lbl_stream,  'Stream On' if stream  else 'Stream Off', _C_ON if stream  else _C_OFF_RED)
         _set(self._lbl_gripper, 'Gripper ✓' if gripper else 'Gripper ✗',  _C_ON if gripper else _C_OFF)
 
         if stream != self._stream_on:
