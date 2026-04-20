@@ -736,6 +736,7 @@ def main(args=None):
     app    = QApplication(sys.argv)
     window = TeleopGuiWindow(ros_node, signals)
     window.show()
+    window._pub_combined_mode()  # vive_rby1_node에 초기 IK 모드 전송
 
     ret = app.exec()
     ros_node.destroy_node()
