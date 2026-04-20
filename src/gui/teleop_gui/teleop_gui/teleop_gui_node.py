@@ -73,12 +73,14 @@ class TeleopGuiNode(Node):
         self._rec_episode_cbs     = []
         self._tracker_status_cbs  = []
         self._rby1_status_cbs     = []
+        self._clutch_state_cbs    = []
 
         self.create_subscription(Joy,    '/teleop/pedal',          self._cb_pedal,          10)
         self.create_subscription(String, '/teleop/rec_state',      self._cb_rec_state,      10)
         self.create_subscription(Int32,  '/teleop/rec_episode',    self._cb_rec_episode,    10)
         self.create_subscription(String, '/teleop/tracker_status', self._cb_tracker_status, 10)
         self.create_subscription(String, '/rby1_status',           self._cb_rby1_status,    10)
+        self.create_subscription(String, '/teleop/clutch_state',   self._cb_clutch_state,   10)
         self.create_timer(1.0, self._poll_nodes)
 
         self._calib_client     = self.create_client(Trigger, '/manus_inspire/calibrate')
@@ -119,6 +121,10 @@ class TeleopGuiNode(Node):
                 cb(data)
         except Exception:
             pass
+
+    def _cb_clutch_state(self, msg):
+        for cb in self._clutch_state_cbs:
+            cb(msg.data)
 
     def _poll_nodes(self):
         names  = {n for n, _ in self.get_node_names_and_namespaces()}
@@ -169,6 +175,7 @@ class Signals(QObject):
     rec_episode_changed    = Signal(int)
     tracker_status_changed = Signal(str, str)
     rby1_status_changed    = Signal(dict)
+    clutch_state_changed   = Signal(str)
 
 
 # ---------------------------------------------------------------------------
@@ -215,6 +222,7 @@ class TeleopGuiWindow(QWidget):
         signals.rec_episode_changed.connect(self._on_rec_episode)
         signals.tracker_status_changed.connect(self._on_tracker_status)
         signals.rby1_status_changed.connect(self._on_rby1_status)
+        signals.clutch_state_changed.connect(self._on_clutch_state)
 
         self._build_ui()
 
@@ -420,6 +428,20 @@ class TeleopGuiWindow(QWidget):
             teleop_row.addWidget(btn)
         vbox.addLayout(teleop_row)
 
+        clutch_row = QHBoxLayout()
+        clutch_row.setSpacing(5)
+        self._lbl_clutch = QLabel('Disengaged')
+        self._lbl_clutch.setAlignment(Qt.AlignCenter)
+        self._lbl_clutch.setFixedHeight(28)
+        self._lbl_clutch.setStyleSheet(
+            'background-color: #E53935; color: white; border-radius: 4px; padding: 0 6px;')
+        self._btn_clutch_toggle = _make_btn('⚙  Clutch Toggle', '#F57C00', height=28)
+        self._btn_clutch_toggle.clicked.connect(
+            lambda: self._node.pub_rby1_cmd('clutch_toggle'))
+        clutch_row.addWidget(self._lbl_clutch, 1)
+        clutch_row.addWidget(self._btn_clutch_toggle, 2)
+        vbox.addLayout(clutch_row)
+
         vbox.addSpacing(4)
 
         ik_row = QHBoxLayout()
@@ -590,6 +612,13 @@ class TeleopGuiWindow(QWidget):
         self._lbl_tracker_l.setStyleSheet(f'color: {_colors.get(sl, "#888")};')
         self._lbl_tracker_r.setStyleSheet(f'color: {_colors.get(sr, "#888")};')
 
+    def _on_clutch_state(self, state: str):
+        engaged = (state == 'ENGAGED')
+        self._lbl_clutch.setText('Engaged' if engaged else 'Disengaged')
+        color = '#4CAF50' if engaged else '#E53935'
+        self._lbl_clutch.setStyleSheet(
+            f'background-color: {color}; color: white; border-radius: 4px; padding: 0 6px;')
+
     def _on_rec_state(self, state: str):
         prev            = self._rec_state
         self._rec_state = state
@@ -742,6 +771,7 @@ def main(args=None):
     ros_node._rec_episode_cbs.append(    lambda e:    signals.rec_episode_changed.emit(e))
     ros_node._tracker_status_cbs.append( lambda l, r: signals.tracker_status_changed.emit(l, r))
     ros_node._rby1_status_cbs.append(    lambda d:    signals.rby1_status_changed.emit(d))
+    ros_node._clutch_state_cbs.append(   lambda s:    signals.clutch_state_changed.emit(s))
 
     spin_thread = threading.Thread(target=rclpy.spin, args=(ros_node,), daemon=True)
     spin_thread.start()

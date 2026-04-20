@@ -282,6 +282,7 @@ ros2 run teleop_gui teleop_gui_node
 **Pedal not detected**
 - Check `input` group membership: `groups | grep input`
 - If missing: `sudo usermod -aG input $USER` then fully log out and back in.
+- Note: re-login (e.g. after adding `realtime` group) resets the active session — re-check `groups` after every re-login and re-add if needed. `usermod` itself is permanent; only the active session needs refreshing.
 
 **Vive trackers not publishing**
 - Ensure SteamVR is running and trackers show green before launching.

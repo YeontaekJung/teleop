@@ -301,6 +301,7 @@ class ViveRby1Node : public rclcpp::Node {
     pub_rec_state_ = create_publisher<std_msgs::msg::String>("/teleop/rec_state", 10);
     pub_rec_episode_ = create_publisher<std_msgs::msg::Int32>("/teleop/rec_episode", 10);
     pub_tracker_status_ = create_publisher<std_msgs::msg::String>("/teleop/tracker_status", 10);
+    pub_clutch_state_   = create_publisher<std_msgs::msg::String>("/teleop/clutch_state",   10);
 
     cli_start_rec_ = create_client<StartRecording>("/scm_recording/start");
     cli_end_rec_ = create_client<EndRecording>("/scm_recording/end");
@@ -377,6 +378,18 @@ class ViveRby1Node : public rclcpp::Node {
 
   void onRby1Command(const std_msgs::msg::String::SharedPtr msg) {
     std::string cmd = msg->data;
+    if (cmd == "clutch_toggle") {
+      if (!teleop_active_) {
+        RCLCPP_WARN(get_logger(), "Cannot toggle clutch -- teleop not active");
+      } else if (engaged_) {
+        disengage();
+      } else if (tracker_l_.raw && tracker_r_.raw) {
+        engage();
+      } else {
+        RCLCPP_WARN(get_logger(), "Cannot engage -- Vive trackers not ready");
+      }
+      return;
+    }
     if (cmd == "teleop_start") {
       if (ik_mode_ == "pink_impedance") {
         cmd = "impedance_teleop_start";
@@ -387,6 +400,12 @@ class ViveRby1Node : public rclcpp::Node {
       }
     }
     sendRby1Command(cmd, "", nullptr);
+  }
+
+  void publishClutchState() {
+    std_msgs::msg::String msg;
+    msg.data = engaged_ ? "ENGAGED" : "DISENGAGED";
+    pub_clutch_state_->publish(msg);
   }
 
   void onPedal(const sensor_msgs::msg::Joy::SharedPtr msg) {
@@ -425,6 +444,7 @@ class ViveRby1Node : public rclcpp::Node {
     sdk_prev_l_.reset();
     sdk_prev_r_.reset();
     engaged_ = true;
+    publishClutchState();
     RCLCPP_INFO(get_logger(), "Clutch ENGAGED");
     if (rec_state_ == kRecReady || rec_state_ == kRecPaused) {
       callTogglePause();
@@ -435,6 +455,7 @@ class ViveRby1Node : public rclcpp::Node {
     engaged_ = false;
     sdk_prev_l_.reset();
     sdk_prev_r_.reset();
+    publishClutchState();
     RCLCPP_INFO(get_logger(), "Clutch DISENGAGED");
     if (rec_state_ == kRecRecording) {
       callTogglePause();
@@ -532,6 +553,7 @@ class ViveRby1Node : public rclcpp::Node {
     if (command == "teleop_stop") {
       teleop_active_ = false;
       engaged_ = false;
+      publishClutchState();
     }
 
     Rby1Command::Goal goal_msg;
@@ -788,6 +810,7 @@ class ViveRby1Node : public rclcpp::Node {
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_rec_state_;
   rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr pub_rec_episode_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_tracker_status_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_clutch_state_;
 
   rclcpp::Client<StartRecording>::SharedPtr cli_start_rec_;
   rclcpp::Client<EndRecording>::SharedPtr cli_end_rec_;
