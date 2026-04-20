@@ -23,8 +23,8 @@ target_include_directories(manus_data_publisher PUBLIC
 target_link_directories(manus_data_publisher PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../ManusSDK/lib/)
 
 #Use the following line if you are using the integrated version of the SDK and haven't installed the GRPC / Protobuf dependencies needed for remote connection
-#target_link_libraries(manus_data_publisher ManusSDK_Integrated ncurses)
-target_link_libraries(manus_data_publisher ManusSDK ncurses)
+target_link_libraries(manus_data_publisher ManusSDK_Integrated ncurses)
+#target_link_libraries(manus_data_publisher ManusSDK ncurses)
 
 target_compile_features(manus_data_publisher PUBLIC c_std_99 cxx_std_17)  # Require C99 and C++17
 
@@ -34,8 +34,8 @@ install(TARGETS manus_data_publisher
 set(LIBRARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../ManusSDK/lib)
 
 #Use the following line if you are using the integrated version of the SDK and haven't installed the GRPC / Protobuf dependencies needed for remote connection
-#set(LIBRARY_FILE ${LIBRARY_DIR}/libManusSDK_Integrated.so)
-set(LIBRARY_FILE ${LIBRARY_DIR}/libManusSDK.so)
+set(LIBRARY_FILE ${LIBRARY_DIR}/libManusSDK_Integrated.so)
+#set(LIBRARY_FILE ${LIBRARY_DIR}/libManusSDK.so)
 
 install(FILES ${LIBRARY_FILE} DESTINATION lib/${PROJECT_NAME})
 
