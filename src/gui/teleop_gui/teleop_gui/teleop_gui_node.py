@@ -237,8 +237,25 @@ class TeleopGuiWindow(QWidget):
         vbox.setSpacing(5)
         vbox.addLayout(self._build_status_row())
         vbox.addLayout(self._build_connect_row())
-        vbox.addLayout(self._build_init_row())
-        vbox.addLayout(self._build_pose_row())
+
+        # Init + Pose rows on the left, STOP MOVE spanning both on the right
+        bottom = QHBoxLayout()
+        bottom.setSpacing(8)
+        left = QVBoxLayout()
+        left.setSpacing(4)
+        left.addLayout(self._build_init_row())
+        left.addLayout(self._build_pose_row())
+        bottom.addLayout(left, 1)
+
+        btn_stop = QPushButton('⚠  STOP\nMOVE')
+        btn_stop.setFixedSize(110, 70)
+        btn_stop.setStyleSheet(
+            'background-color: #FFD600; color: #000000;'
+            'font-weight: bold; font-size: 13px;')
+        btn_stop.clicked.connect(lambda: self._node.pub_rby1_cmd('stop_move'))
+        bottom.addWidget(btn_stop)
+
+        vbox.addLayout(bottom)
         group.setLayout(vbox)
         return group
 
@@ -310,7 +327,6 @@ class TeleopGuiWindow(QWidget):
             ('Ready Pose', 'ready_pose', '#546E7A'),
             ('VLA Pose',   'vla_pose',   '#546E7A'),
             ('VLA2 Pose',  'vla_pose2',  '#546E7A'),
-            ('⬛ Stop Move','stop_move',  '#B71C1C'),
         ]:
             btn = _make_btn(label, color, height=30)
             btn.clicked.connect(lambda _, c=cmd: self._node.pub_rby1_cmd(c))
