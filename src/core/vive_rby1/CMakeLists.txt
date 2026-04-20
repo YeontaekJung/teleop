@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.8)
+cmake_minimum_required(VERSION 3.10)
 project(vive_rby1)
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
@@ -24,13 +24,13 @@ add_executable(vive_rby1_node
 )
 
 target_compile_features(vive_rby1_node PUBLIC cxx_std_17)
-target_link_libraries(vive_rby1_node PRIVATE Eigen3::Eigen)
+target_link_libraries(vive_rby1_node Eigen3::Eigen)
 
 if(TARGET pinocchio::pinocchio)
-  target_link_libraries(vive_rby1_node PRIVATE pinocchio::pinocchio)
+  target_link_libraries(vive_rby1_node pinocchio::pinocchio)
 else()
   target_include_directories(vive_rby1_node PRIVATE ${pinocchio_INCLUDE_DIRS})
-  target_link_libraries(vive_rby1_node PRIVATE ${pinocchio_LIBRARIES})
+  target_link_libraries(vive_rby1_node ${pinocchio_LIBRARIES})
 endif()
 
 ament_target_dependencies(vive_rby1_node
