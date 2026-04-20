@@ -1,0 +1,7 @@
+#!/usr/bin/env python3
+
+from vive_rby1.vive_rby1_node import main
+
+
+if __name__ == "__main__":
+    main()

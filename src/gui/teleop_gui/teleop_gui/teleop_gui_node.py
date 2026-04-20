@@ -314,7 +314,10 @@ class TeleopGuiWindow(QWidget):
             ('Gripper Init', 'gripper_init',  '#00838F'),
         ]:
             btn = _make_btn(label, color, height=30)
-            btn.clicked.connect(lambda _, c=cmd: self._node.pub_rby1_cmd(c))
+            if cmd == 'teleop_start':
+                btn.clicked.connect(self._on_teleop_start)
+            else:
+                btn.clicked.connect(lambda _, c=cmd: self._node.pub_rby1_cmd(c))
             row.addWidget(btn)
         row.addStretch()
         return row
@@ -646,10 +649,20 @@ class TeleopGuiWindow(QWidget):
         ctrl = 'position' if self._bg_ctrl.checkedId() == 0 else 'impedance'
         self._node.pub_control_mode(f'{ik}_{ctrl}')
 
+    def _sync_control_settings(self):
+        self._pub_combined_mode()
+        self._node.pub_mirror_mode(self._bg_track.checkedId() == 1)
+        self._node.pub_task_id(self._spin_task.value())
+
+    def _on_teleop_start(self):
+        self._sync_control_settings()
+        self._node.pub_rby1_cmd('teleop_start')
+
     def _on_mirror_mode_changed(self, btn_id: int):
         self._node.pub_mirror_mode(btn_id == 1)
 
     def _on_rec_btn(self):
+        self._sync_control_settings()
         self._btn_rec.setEnabled(False)
         threading.Thread(
             target=self._node.call_toggle_episode,

@@ -3,24 +3,33 @@
   <name>vive_rby1</name>
   <version>0.1.0</version>
   <description>
-    Vive tracker → RB-Y1 teleoperation bridge.
-    Subscribes to tracker poses + pedal, computes delta EE targets,
-    solves IK, and publishes JointGroupCommand.
+    Vive tracker to RB-Y1 teleoperation bridge.
+    Subscribes to tracker poses and pedal events, computes teleop targets,
+    and publishes RB-Y1 teleoperation commands.
   </description>
   <maintainer email="todo@todo.com">todo</maintainer>
   <license>MIT</license>
 
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
+  <buildtool_depend>eigen3_cmake_module</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>rclcpp_action</depend>
+  <depend>geometry_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>std_srvs</depend>
+  <depend>interbotix_xs_msgs</depend>
+  <depend>rby1_core_msgs</depend>
+  <depend>scm_recording_msgs</depend>
+  <depend>eigen</depend>
+  <depend>pinocchio</depend>
+
   <exec_depend>rclpy</exec_depend>
-  <exec_depend>geometry_msgs</exec_depend>
-  <exec_depend>sensor_msgs</exec_depend>
-  <exec_depend>std_msgs</exec_depend>
-  <exec_depend>std_srvs</exec_depend>
   <exec_depend>rby1_ik</exec_depend>
 
-  <!-- rby1_sdk_msgs: JointGroupCommand, Rby1Command - install separately from rby1 SDK -->
-  <exec_depend>scm_recording_msgs</exec_depend>
-
   <export>
-    <build_type>ament_python</build_type>
+    <build_type>ament_cmake</build_type>
   </export>
 </package>

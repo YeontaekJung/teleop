@@ -136,7 +136,7 @@ ros2 run vive_ros2 vive_tracker_node  # serials printed on connect
 
 ### URDF / SRDF paths
 
-Edit the default paths in `src/core/vive_rby1/vive_rby1/vive_rby1_node.py`, or pass at runtime:
+Edit the default paths in `src/core/vive_rby1/config/vive_rby1.yaml`, or pass at runtime:
 
 ```bash
 ros2 run vive_rby1 vive_rby1_node --ros-args \
@@ -252,6 +252,7 @@ ros2 run manus_ros2 manus_data_publisher
 
 # Core
 ros2 run vive_rby1 vive_rby1_node
+ros2 run vive_rby1 vive_rby1_debug_node   # optional legacy Python debug node
 ros2 run manus_inspire manus_inspire_node
 
 # GUI
@@ -270,7 +271,7 @@ ros2 run teleop_gui teleop_gui_node
 | `scm_recording_msgs` | msgs | Recording core service definitions |
 | `rby1_core_msgs` | msgs | RB-Y1 core action definitions (`Rby1Command`) |
 | `manus_inspire` | core | Manus glove data → Inspire hand commands + 4-phase calibration |
-| `rby1_ik` | core | Differential IK solver (pink + pinocchio) |
+| `rby1_ik` | core | Legacy Python IK helper kept for debug/experiments |
 | `vive_rby1` | core | Tracker delta → RB-Y1 joint commands, recording state machine |
 | `teleop_gui` | gui | PySide6 GUI (node status, tracker status, teleop panel, recording, calibration) |
 | `teleop_bringup` | launch | Launch file for full system |

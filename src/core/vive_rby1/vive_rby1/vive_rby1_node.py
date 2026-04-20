@@ -111,6 +111,17 @@ def se3_to_pose_stamped(se3: pin.SE3, frame_id='world') -> PoseStamped:
     return msg
 
 
+def tracker_target_to_ee_target(se3: pin.SE3) -> pin.SE3:
+    """Convert a tracker frame target into the corresponding ee frame target.
+
+    In the RB-Y1 URDF, `tracker_left/right` are fixed children of `ee_left/right`
+    with xyz=(0.05, 0.0, -0.1) and no rotation. The SDK teleop path in hw-core
+    commands `ee_left/right`, so SDK targets must be expressed in the ee frames.
+    """
+    T_ee_tracker = pin.SE3(np.eye(3), np.array([0.05, 0.0, -0.1]))
+    return se3 * T_ee_tracker.inverse()
+
+
 # ---------------------------------------------------------------------------
 # Node
 # ---------------------------------------------------------------------------
@@ -617,8 +628,10 @@ class ViveRby1Node(Node):
         r_SE3 = pin.SE3(target_rot_r, target_pos_r)
 
         if self._ik_mode.startswith('sdk_'):
-            sdk_l = self._limit_sdk_target(self._sdk_prev_l, l_SE3, 'left')
-            sdk_r = self._limit_sdk_target(self._sdk_prev_r, r_SE3, 'right')
+            ee_l = tracker_target_to_ee_target(l_SE3)
+            ee_r = tracker_target_to_ee_target(r_SE3)
+            sdk_l = self._limit_sdk_target(self._sdk_prev_l, ee_l, 'left')
+            sdk_r = self._limit_sdk_target(self._sdk_prev_r, ee_r, 'right')
             if sdk_l is None or sdk_r is None:
                 return
             self._sdk_prev_l = sdk_l

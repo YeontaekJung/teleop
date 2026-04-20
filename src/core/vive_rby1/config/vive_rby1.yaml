@@ -1,23 +1,19 @@
 vive_rby1_node:
   ros__parameters:
-    # URDF / SRDF paths for IK solver
     urdf_path: "/path/to/robot_description/rby1/rby1.urdf"
     srdf_path: "/path/to/robot_description/rby1/rby1.srdf"
 
-    # Topics - inputs
-    topic_tracker_left:   "/teleop/tracker/left"
-    topic_tracker_right:  "/teleop/tracker/right"
-    topic_pedal:          "/teleop/pedal"
-    topic_joint_state:    "/joint_states"   # from rby1 SDK
-
-    # Topics - output
+    topic_tracker_left: "/teleop/tracker/left"
+    topic_tracker_right: "/teleop/tracker/right"
+    topic_pedal: "/teleop/pedal"
+    topic_joint_state: "/rby1_status_joint"
     topic_teleop_command: "/rby1_teleop_command"
 
-    # Teleoperation parameters
-    pos_scale: 1.0        # position delta scale factor
-    ik_dt:     0.05       # IK time step [s]  (= 1/publish_rate)
-    publish_rate: 20.0    # Hz
+    pos_scale: 1.0
+    ik_dt: 0.05
+    publish_rate: 100.0
+    sdk_max_delta_pos: 0.03
+    sdk_max_delta_rot_deg: 20.0
 
-    # Pedal: which Joy axis/button triggers clutch
-    # True = button mode (button[pedal_index] == 1 → active)
-    pedal_button_index: 0
+    pedal_engage_index: 0
+    pedal_episode_index: 2
