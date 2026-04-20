@@ -131,6 +131,8 @@ class ViveRby1Node(Node):
         self.declare_parameter('pos_scale',            2.0)
         self.declare_parameter('ik_dt',                0.05)
         self.declare_parameter('publish_rate',         20.0)
+        self.declare_parameter('sdk_max_delta_pos',    0.03)
+        self.declare_parameter('sdk_max_delta_rot_deg', 20.0)
         self.declare_parameter('pedal_engage_index',   0)
         self.declare_parameter('pedal_episode_index',  2)
 
@@ -144,6 +146,9 @@ class ViveRby1Node(Node):
 
         self._pos_scale         = self.get_parameter('pos_scale').value
         self._ik_dt             = self.get_parameter('ik_dt').value
+        self._sdk_max_delta_pos = float(self.get_parameter('sdk_max_delta_pos').value)
+        self._sdk_max_delta_rot = np.deg2rad(
+            float(self.get_parameter('sdk_max_delta_rot_deg').value))
         self._pedal_engage_idx  = self.get_parameter('pedal_engage_index').value
         self._pedal_episode_idx = self.get_parameter('pedal_episode_index').value
         rate_hz                 = self.get_parameter('publish_rate').value
@@ -186,6 +191,8 @@ class ViveRby1Node(Node):
         self._ref_r:   pin.SE3 | None = None
         self._ee_l_0:  pin.SE3 | None = None
         self._ee_r_0:  pin.SE3 | None = None
+        self._sdk_prev_l: pin.SE3 | None = None
+        self._sdk_prev_r: pin.SE3 | None = None
 
         # Recording state
         self._rec_state   = REC_IDLE
@@ -349,6 +356,8 @@ class ViveRby1Node(Node):
         fid_r = self._ik.robot.model.getFrameId('tracker_right')
         self._ee_l_0 = self._ik.robot.framePlacement(q_pin, fid_l)
         self._ee_r_0 = self._ik.robot.framePlacement(q_pin, fid_r)
+        self._sdk_prev_l = None
+        self._sdk_prev_r = None
 
         self._engaged = True
         self.get_logger().info('Clutch ENGAGED')
@@ -359,6 +368,8 @@ class ViveRby1Node(Node):
 
     def _on_disengage(self):
         self._engaged = False
+        self._sdk_prev_l = None
+        self._sdk_prev_r = None
         self.get_logger().info('Clutch DISENGAGED')
 
         # Auto-pause recording if currently recording
@@ -492,6 +503,43 @@ class ViveRby1Node(Node):
         self._pub_rec_state.publish(String(data=self._rec_state))
         self._pub_rec_ep.publish(Int32(data=self._rec_episode))
 
+    def _limit_sdk_target(self, prev: pin.SE3 | None, target: pin.SE3,
+                          arm_name: str) -> pin.SE3 | None:
+        if (not np.isfinite(target.translation).all() or
+                not np.isfinite(target.rotation).all()):
+            self.get_logger().warn(
+                f'[vive_rby1] dropping non-finite SDK target for {arm_name}')
+            return prev
+
+        if prev is None:
+            return target
+
+        pos = target.translation.copy()
+        delta = pos - prev.translation
+        delta_norm = np.linalg.norm(delta)
+        if delta_norm > self._sdk_max_delta_pos > 0.0:
+            pos = prev.translation + delta / delta_norm * self._sdk_max_delta_pos
+
+        rot_prev = R.from_matrix(prev.rotation)
+        rot_target = R.from_matrix(target.rotation)
+        angle = (rot_prev.inv() * rot_target).magnitude()
+        if not np.isfinite(angle):
+            self.get_logger().warn(
+                f'[vive_rby1] dropping invalid SDK rotation for {arm_name}')
+            return prev
+
+        if angle > self._sdk_max_delta_rot > 0.0:
+            ratio = self._sdk_max_delta_rot / angle
+            slerp = Slerp(
+                [0.0, 1.0],
+                R.from_quat(np.vstack([rot_prev.as_quat(), rot_target.as_quat()])),
+            )
+            rot = slerp(ratio).as_matrix()
+        else:
+            rot = target.rotation
+
+        return pin.SE3(rot, pos)
+
     def _tracker_status(self, buf: deque, stamp: float) -> str:
         if time.monotonic() - stamp > 0.5:
             return 'LOST'
@@ -569,11 +617,17 @@ class ViveRby1Node(Node):
         r_SE3 = pin.SE3(target_rot_r, target_pos_r)
 
         if self._ik_mode.startswith('sdk_'):
+            sdk_l = self._limit_sdk_target(self._sdk_prev_l, l_SE3, 'left')
+            sdk_r = self._limit_sdk_target(self._sdk_prev_r, r_SE3, 'right')
+            if sdk_l is None or sdk_r is None:
+                return
+            self._sdk_prev_l = sdk_l
+            self._sdk_prev_r = sdk_r
             pa = PoseArray()
             pa.header.frame_id = 'base'
             pa.header.stamp = self.get_clock().now().to_msg()
-            pa.poses.append(se3_to_pose(r_SE3))
-            pa.poses.append(se3_to_pose(l_SE3))
+            pa.poses.append(se3_to_pose(sdk_r))
+            pa.poses.append(se3_to_pose(sdk_l))
             self._pub_sdk_target.publish(pa)
         else:
             q20 = self._ik.solve_ik_to_q20(l_SE3, r_SE3, self._ik_dt)

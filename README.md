@@ -172,8 +172,10 @@ Select in the GUI before starting a session (locked during active recording):
 
 | Mode | Topic | Description |
 |------|-------|-------------|
-| Position | `/rby1_teleop_command` | Joint position tracking via differential IK |
-| Impedance | `/rby1_impedance_teleop_command` | Impedance control via `rby1_core` |
+| Pink Position | `/rby1_teleop_command` | Joint position tracking via differential IK |
+| Pink Impedance | `/rby1_impedance_teleop_command` | Joint impedance tracking via local IK |
+| SDK Position | `/rby1_sdk_teleop_command` | Cartesian end-effector targets as `geometry_msgs/PoseArray` |
+| SDK Impedance | `/rby1_sdk_teleop_command` | Cartesian impedance targets as `geometry_msgs/PoseArray` |
 
 ### Teleoperation (without recording)
 
