@@ -94,13 +94,6 @@ geometry_msgs::msg::Pose se3ToPose(const pinocchio::SE3 & se3) {
   return pose;
 }
 
-double clampMagnitude(double value, double limit) {
-  if (limit <= 0.0) {
-    return value;
-  }
-  return std::clamp(value, -limit, limit);
-}
-
 bool isFinite(const pinocchio::SE3 & se3) {
   return se3.translation().allFinite() && se3.rotation().allFinite();
 }
@@ -774,7 +767,8 @@ class ViveRby1Node : public rclcpp::Node {
   }
 
   double nowSec() const {
-    return static_cast<double>(get_clock()->now().nanoseconds()) * 1e-9;
+    return static_cast<double>(
+      const_cast<rclcpp::Clock &>(*get_clock()).now().nanoseconds()) * 1e-9;
   }
 
   std::unique_ptr<DifferentialIkSolver> ik_solver_;
