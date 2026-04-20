@@ -555,7 +555,7 @@ class TeleopGuiWindow(QWidget):
 
         if stream != self._stream_on:
             self._stream_on = stream
-            self._refresh_pedal_a()
+            self._update_rec_btn_enable()
 
         if ctrl == 'State.Enabled':
             _set(self._lbl_control, 'Enabled', _C_ON)
@@ -564,22 +564,13 @@ class TeleopGuiWindow(QWidget):
         else:
             _set(self._lbl_control, 'Idle', _C_OFF)
 
-    def _refresh_pedal_a(self):
-        """stream off이면 pedal A(engage toggle)를 dimmed 처리"""
-        btn = self._btn_pedals[0]
-        if not self._stream_on:
-            btn.setStyleSheet('background-color: #e0e0e0; color: #aaa;')
-        else:
-            pressed = btn.property('pressed') or False
-            color = '#A6D256' if pressed else '#ccc'
-            btn.setStyleSheet(f'background-color: {color}; color: #333;')
+    def _update_rec_btn_enable(self):
+        """stream 상태가 바뀌면 End Episode 버튼 활성화 상태 갱신"""
+        if self._btn_rec.text() == '■  End Episode':
+            self._btn_rec.setEnabled(self._stream_on and self._rec_state in ('READY', 'PAUSED'))
 
     def _on_pedal(self, state: list):
         for i, (btn, pressed) in enumerate(zip(self._btn_pedals, state)):
-            if i == 0 and not self._stream_on:
-                # pedal A: stream off이면 눌려도 dimmed 유지
-                btn.setProperty('pressed', pressed)
-                continue
             color = '#A6D256' if pressed else '#ccc'
             btn.setStyleSheet(f'background-color: {color}; color: #333;')
             if i == 0:
@@ -628,7 +619,7 @@ class TeleopGuiWindow(QWidget):
             self._btn_rec.setText('■  End Episode')
             self._btn_rec.setStyleSheet(
                 'background-color: #E53935; color: white; font-weight: bold;')
-            self._btn_rec.setEnabled(state in ('READY', 'PAUSED'))
+            self._btn_rec.setEnabled(self._stream_on and state in ('READY', 'PAUSED'))
 
     def _tick_countdown(self):
         self._rec_countdown -= 1
