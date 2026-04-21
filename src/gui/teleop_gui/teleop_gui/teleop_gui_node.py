@@ -462,10 +462,10 @@ class TeleopGuiWindow(QWidget):
         ctrl_row.addWidget(QLabel('Ctrl:'))
         self._rb_ctrl_position  = QRadioButton('Position')
         self._rb_ctrl_impedance = QRadioButton('Impedance')
-        self._rb_ctrl_position.setChecked(True)
+        self._rb_ctrl_impedance.setChecked(True)
+        self._rb_ctrl_position.setEnabled(False)
         self._bg_ctrl = QButtonGroup()
         self._bg_ctrl.addButton(self._rb_ctrl_position,  0)
-    
         self._bg_ctrl.addButton(self._rb_ctrl_impedance, 1)
         self._bg_ctrl.idClicked.connect(self._on_ctrl_mode_changed)
         ctrl_row.addWidget(self._rb_ctrl_position)
