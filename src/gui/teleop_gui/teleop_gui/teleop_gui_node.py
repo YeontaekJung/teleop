@@ -445,10 +445,10 @@ class TeleopGuiWindow(QWidget):
         vbox.addSpacing(4)
 
         ik_row = QHBoxLayout()
-        ik_row.addWidget(QLabel('IK'))
-        self._rb_ik_sdk  = QRadioButton('SDK')
-        self._rb_ik_pink = QRadioButton('Pink')
-        self._rb_ik_sdk.setChecked(True)
+        ik_row.addWidget(QLabel('IK:'))
+        self._rb_ik_sdk  = QRadioButton('Cartesian')
+        self._rb_ik_pink = QRadioButton('Joint')
+        self._rb_ik_pink.setChecked(True)
         self._bg_ik = QButtonGroup()
         self._bg_ik.addButton(self._rb_ik_sdk,  0)
         self._bg_ik.addButton(self._rb_ik_pink, 1)
@@ -459,7 +459,7 @@ class TeleopGuiWindow(QWidget):
         vbox.addLayout(ik_row)
 
         ctrl_row = QHBoxLayout()
-        ctrl_row.addWidget(QLabel('Ctrl'))
+        ctrl_row.addWidget(QLabel('Ctrl:'))
         self._rb_ctrl_position  = QRadioButton('Position')
         self._rb_ctrl_impedance = QRadioButton('Impedance')
         self._rb_ctrl_position.setChecked(True)
