@@ -443,6 +443,10 @@ class ViveRby1Node : public rclcpp::Node {
     ee_r_0_ = ik_solver_->framePlacement("tracker_right");
     sdk_ee_l_0_ = ik_solver_->framePlacement("ee_left");
     sdk_ee_r_0_ = ik_solver_->framePlacement("ee_right");
+    // SDK FK(rby1_rt) vs pinocchio FK(공칭 URDF) 간 Z 오프셋 보정
+    // 측정값(ready pose): 우 +2.6cm, 좌 +3.9cm (SDK FK가 더 높음)
+    sdk_ee_r_0_->translation().z() += 0.026;
+    sdk_ee_l_0_->translation().z() += 0.039;
     sdk_prev_l_.reset();
     sdk_prev_r_.reset();
     engaged_ = true;
