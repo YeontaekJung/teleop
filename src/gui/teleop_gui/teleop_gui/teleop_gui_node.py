@@ -448,7 +448,7 @@ class TeleopGuiWindow(QWidget):
         ik_row.addWidget(QLabel('IK:'))
         self._rb_ik_sdk  = QRadioButton('Cartesian')
         self._rb_ik_pink = QRadioButton('Joint')
-        self._rb_ik_pink.setChecked(True)
+        self._rb_ik_sdk.setChecked(True)
         self._bg_ik = QButtonGroup()
         self._bg_ik.addButton(self._rb_ik_sdk,  0)
         self._bg_ik.addButton(self._rb_ik_pink, 1)
@@ -465,6 +465,7 @@ class TeleopGuiWindow(QWidget):
         self._rb_ctrl_position.setChecked(True)
         self._bg_ctrl = QButtonGroup()
         self._bg_ctrl.addButton(self._rb_ctrl_position,  0)
+    
         self._bg_ctrl.addButton(self._rb_ctrl_impedance, 1)
         self._bg_ctrl.idClicked.connect(self._on_ctrl_mode_changed)
         ctrl_row.addWidget(self._rb_ctrl_position)
@@ -580,7 +581,6 @@ class TeleopGuiWindow(QWidget):
 
         if stream != self._stream_on:
             self._stream_on = stream
-            self._update_rec_btn_enable()
 
         if ctrl == 'State.Enabled':
             _set(self._lbl_control, 'Enabled', _C_ON)
@@ -589,10 +589,6 @@ class TeleopGuiWindow(QWidget):
         else:
             _set(self._lbl_control, 'Idle', _C_OFF)
 
-    def _update_rec_btn_enable(self):
-        """stream 상태가 바뀌면 End Episode 버튼 활성화 상태 갱신"""
-        if self._btn_rec.text() == '■  End Episode':
-            self._btn_rec.setEnabled(self._stream_on and self._rec_state in ('READY', 'PAUSED'))
 
     def _on_pedal(self, state: list):
         for i, (btn, pressed) in enumerate(zip(self._btn_pedals, state)):
@@ -651,7 +647,7 @@ class TeleopGuiWindow(QWidget):
             self._btn_rec.setText('■  End Episode')
             self._btn_rec.setStyleSheet(
                 'background-color: #E53935; color: white; font-weight: bold;')
-            self._btn_rec.setEnabled(self._stream_on and state in ('READY', 'PAUSED'))
+            self._btn_rec.setEnabled(state in ('READY', 'PAUSED'))
 
     def _tick_countdown(self):
         self._rec_countdown -= 1
