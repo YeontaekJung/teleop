@@ -441,6 +441,8 @@ class ViveRby1Node : public rclcpp::Node {
     ref_r_ = tracker_r_.smoothed;
     ee_l_0_ = ik_solver_->framePlacement("tracker_left");
     ee_r_0_ = ik_solver_->framePlacement("tracker_right");
+    sdk_ee_l_0_ = ik_solver_->framePlacement("ee_left");
+    sdk_ee_r_0_ = ik_solver_->framePlacement("ee_right");
     sdk_prev_l_.reset();
     sdk_prev_r_.reset();
     engaged_ = true;
@@ -715,7 +717,8 @@ class ViveRby1Node : public rclcpp::Node {
     if (!tracker_l_.raw || !tracker_r_.raw || !tracker_l_.smoothed || !tracker_r_.smoothed) {
       return;
     }
-    if (!engaged_ || !ref_l_ || !ref_r_ || !ee_l_0_ || !ee_r_0_) {
+    if (!engaged_ || !ref_l_ || !ref_r_ || !ee_l_0_ || !ee_r_0_ ||
+        !sdk_ee_l_0_ || !sdk_ee_r_0_) {
       return;
     }
 
@@ -752,8 +755,17 @@ class ViveRby1Node : public rclcpp::Node {
     const pinocchio::SE3 right_target(dR_r_robot * ee_r_0_->rotation(), target_pos_r);
 
     if (ik_mode_.rfind("sdk_", 0) == 0) {
-      const auto sdk_l = limitSdkTarget(sdk_prev_l_, left_target, "left");
-      const auto sdk_r = limitSdkTarget(sdk_prev_r_, right_target, "right");
+      // SDK mode: rby1_rt targets ee_right/ee_left, not tracker frame.
+      // tracker_right is offset from ee_right by [0.05, 0, -0.1] (URDF).
+      // Re-anchor the already-correct delta onto the ee frame reference.
+      const pinocchio::SE3 sdk_right_target(
+        dR_r_robot * sdk_ee_r_0_->rotation(),
+        sdk_ee_r_0_->translation() + (target_pos_r - ee_r_0_->translation()));
+      const pinocchio::SE3 sdk_left_target(
+        dR_l_robot * sdk_ee_l_0_->rotation(),
+        sdk_ee_l_0_->translation() + (target_pos_l - ee_l_0_->translation()));
+      const auto sdk_l = limitSdkTarget(sdk_prev_l_, sdk_left_target, "left");
+      const auto sdk_r = limitSdkTarget(sdk_prev_r_, sdk_right_target, "right");
       if (!sdk_l || !sdk_r) {
         return;
       }
@@ -826,6 +838,8 @@ class ViveRby1Node : public rclcpp::Node {
   std::optional<pinocchio::SE3> ref_r_;
   std::optional<pinocchio::SE3> ee_l_0_;
   std::optional<pinocchio::SE3> ee_r_0_;
+  std::optional<pinocchio::SE3> sdk_ee_l_0_;   // SDK 모드용 ee_left 초기 참조
+  std::optional<pinocchio::SE3> sdk_ee_r_0_;   // SDK 모드용 ee_right 초기 참조
   std::optional<pinocchio::SE3> sdk_prev_l_;
   std::optional<pinocchio::SE3> sdk_prev_r_;
 
