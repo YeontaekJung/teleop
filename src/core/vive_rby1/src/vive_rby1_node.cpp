@@ -248,7 +248,7 @@ class ViveRby1Node : public rclcpp::Node {
     declare_parameter("topic_pedal", "/teleop/pedal");
     declare_parameter("topic_joint_state", "/rby1_status_joint");
     declare_parameter("topic_teleop_command", "/rby1_teleop_command");
-    declare_parameter("pos_scale", 2.0);
+    declare_parameter("pos_scale", 1.0);
     declare_parameter("ik_dt", 0.05);
     declare_parameter("publish_rate", 20.0);
     declare_parameter("sdk_max_delta_pos", 0.03);
@@ -856,7 +856,7 @@ class ViveRby1Node : public rclcpp::Node {
   bool pedal_engage_prev_{false};
   bool pedal_episode_prev_{false};
 
-  double pos_scale_{2.0};
+  double pos_scale_{1.0};
   double ik_dt_{0.05};
   double publish_rate_{20.0};
   double sdk_max_delta_pos_{0.03};
