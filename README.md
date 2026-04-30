@@ -1,4 +1,4 @@
-# teleoperation-core
+# teleop
 
 ROS2 Humble workspace for bimanual teleoperation using motion capture hardware.
 Currently supports RB-Y1 robot with Vive Trackers (arm control) and Manus gloves (hand control).
@@ -10,8 +10,9 @@ Designed to be extensible — additional robot platforms and input devices can b
 Input              Core                      Output
 ──────────────────────────────────────────────────────────────────────
 manus_ros2      →  manus_inspire          →  inspire_driver            (Inspire Hand)
-vive_ros2       →  vive_rby1 (+ rby1_ik)  →  /rby1_teleop_command      (RB-Y1, position mode)
-                                          →  /rby1_impedance_teleop_command  (RB-Y1, impedance mode)
+vive_ros2       →  vive_rby1 (+ rby1_ik)  →  /rby1_teleop_command      (RB-Y1, pink position)
+                                          →  /rby1_impedance_teleop_command  (RB-Y1, pink impedance)
+                                          →  /rby1_sdk_teleop_command   (RB-Y1, sdk position/impedance)
 pedal_ros2      →  clutch / recording     →  /scm_recording/start|end|toggle_pause
 rby1_core_msgs  →  /rby1_command          →  rby1_core_node            (pose commands)
 ```
@@ -19,6 +20,29 @@ rby1_core_msgs  →  /rby1_command          →  rby1_core_node            (pose
 All msg/srv/action definitions are under `src/msgs/`.
 
 A GUI node (`teleop_gui`) provides live system status, teleop controls, tracker status, and calibration.
+
+## Published Topics
+
+### rby1_rt_node (hw-core)
+
+| Topic | Type | Description |
+|-------|------|-------------|
+| `/rby1_status` | `std_msgs/String` | JSON 시스템 상태 (control/power/servo/stream/ctr_type) |
+| `/rby1_status_joint` | `sensor_msgs/JointState` | 전체 joint 실제값 (position / velocity / torque) |
+| `/rby1_sdk_joint_state` | `sensor_msgs/JointState` | arm 14개 joint — warmup: actual, CartesianImpedance 스트림: IK reference (set_position) |
+| `/rby1_ee_pose` | `geometry_msgs/PoseArray` | SDK FK 기반 EE pose — poses[0]=ee_right, poses[1]=ee_left (base frame) |
+
+### vive_rby1_node
+
+| Topic | Type | Description |
+|-------|------|-------------|
+| `/rby1_teleop_command` | `JointGroupCommand` | pink_position 모드 joint 명령 |
+| `/rby1_impedance_teleop_command` | `JointGroupCommand` | pink_impedance 모드 joint 명령 |
+| `/rby1_sdk_teleop_command` | `geometry_msgs/PoseArray` | sdk_position / sdk_impedance EE target — poses[0]=right, poses[1]=left |
+| `/teleop/rec_state` | `std_msgs/String` | 녹화 상태 (IDLE / READY / RECORDING / PAUSED) |
+| `/teleop/rec_episode` | `std_msgs/Int32` | 현재 에피소드 번호 |
+| `/teleop/tracker_status` | `std_msgs/String` | 트래커 상태 (L:OK/JITTER/LOST R:OK/JITTER/LOST) |
+| `/teleop/clutch_state` | `std_msgs/String` | clutch engaged / disengaged |
 
 ## Hardware Requirements (Current Setup)
 
@@ -57,8 +81,8 @@ The GUI shows live node status, pedal state, tracker status (OK / JITTER / LOST)
 ### 1. Clone the repository
 
 ```bash
-git clone <repo-url> 2026
-cd 2026
+git clone <repo-url> teleop
+cd teleop
 ```
 
 ### 2. ManusSDK (manual copy required — binary too large for git)
