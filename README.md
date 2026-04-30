@@ -90,7 +90,7 @@ cd teleop
 Copy the ManusSDK folder to the repo root:
 
 ```
-2026/
+teleop/
 └── ManusSDK/
     ├── include/
     │   ├── ManusSDK.h
@@ -131,7 +131,7 @@ pip3 install empy==3.3.4   # required for colcon build — do NOT use empy 4.x
 ### 4. Build
 
 ```bash
-cd 2026
+cd teleop
 source /opt/ros/humble/setup.bash
 colcon build
 source install/setup.bash
