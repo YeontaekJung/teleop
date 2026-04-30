@@ -298,6 +298,11 @@ class ViveRby1Node : public rclcpp::Node {
     pub_impedance_cmd_ = create_publisher<interbotix_xs_msgs::msg::JointGroupCommand>(
       "/rby1_impedance_teleop_command", 10);
     pub_sdk_target_ = create_publisher<geometry_msgs::msg::PoseArray>("/rby1_sdk_teleop_command", 10);
+    // ── EE Pose Publisher → warmup hold ──────────────────────────────────
+    sub_ee_pose_ = create_subscription<geometry_msgs::msg::PoseArray>(
+      "/rby1_ee_pose", 10,
+      [this](const geometry_msgs::msg::PoseArray::SharedPtr msg) { last_ee_pose_ = *msg; });
+    // ─────────────────────────────────────────────────────────────────────
     pub_rec_state_ = create_publisher<std_msgs::msg::String>("/teleop/rec_state", 10);
     pub_rec_episode_ = create_publisher<std_msgs::msg::Int32>("/teleop/rec_episode", 10);
     pub_tracker_status_ = create_publisher<std_msgs::msg::String>("/teleop/tracker_status", 10);
@@ -714,6 +719,11 @@ class ViveRby1Node : public rclcpp::Node {
       --warmup_ticks_;
       if (ik_mode_.rfind("sdk_", 0) != 0) {
         publishQ20(ik_solver_->currentQ20());
+      } else if (last_ee_pose_) {
+        // ── EE Pose Publisher → warmup hold ──────────────────────────────
+        // Hold current EE pose during SDK mode warmup (FK from rby1_rt)
+        pub_sdk_target_->publish(*last_ee_pose_);
+        // ─────────────────────────────────────────────────────────────────
       }
       return;
     }
@@ -819,6 +829,7 @@ class ViveRby1Node : public rclcpp::Node {
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr sub_control_mode_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr sub_rby1_command_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr sub_mirror_mode_;
+  rclcpp::Subscription<geometry_msgs::msg::PoseArray>::SharedPtr sub_ee_pose_;  // EE Pose Publisher → warmup hold
 
   rclcpp::Publisher<interbotix_xs_msgs::msg::JointGroupCommand>::SharedPtr pub_cmd_;
   rclcpp::Publisher<interbotix_xs_msgs::msg::JointGroupCommand>::SharedPtr pub_impedance_cmd_;
@@ -852,6 +863,8 @@ class ViveRby1Node : public rclcpp::Node {
   std::string rec_state_{kRecIdle};
   int rec_episode_{-1};
   int rec_task_id_{0};
+  std::optional<geometry_msgs::msg::PoseArray> last_ee_pose_;  // EE Pose Publisher → warmup hold
+
   std::string ik_mode_{"pink_position"};
   bool mirror_mode_{false};
   int warmup_ticks_{0};
