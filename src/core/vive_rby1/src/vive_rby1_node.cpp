@@ -617,9 +617,12 @@ class ViveRby1Node : public rclcpp::Node {
           on_complete();
         }
         if (!then.empty() && succeeded) {
-          std::thread([this, then]() {
+          std::weak_ptr<ViveRby1Node> weak = std::static_pointer_cast<ViveRby1Node>(shared_from_this());
+          std::thread([weak, then]() {
             std::this_thread::sleep_for(1s);
-            sendRby1Command(then, "", nullptr);
+            if (auto self = weak.lock()) {
+              self->sendRby1Command(then, "", nullptr);
+            }
           }).detach();
         }
       };
