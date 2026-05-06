@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cctype>
 #include <cmath>
 #include <deque>
 #include <functional>
@@ -364,10 +365,27 @@ class ViveRby1Node : public rclcpp::Node {
   }
 
   void onControlMode(const std_msgs::msg::String::SharedPtr msg) {
-    ik_mode_ = msg->data;
+    std::string mode = msg->data;
+    std::transform(
+      mode.begin(), mode.end(), mode.begin(),
+      [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+    if (mode.find("sdk") != std::string::npos && mode.find("imp") != std::string::npos) {
+      ik_mode_ = "sdk_impedance";
+    } else if (mode.find("sdk") != std::string::npos && mode.find("pos") != std::string::npos) {
+      ik_mode_ = "sdk_position";
+    } else if (mode.find("pink") != std::string::npos && mode.find("imp") != std::string::npos) {
+      ik_mode_ = "pink_impedance";
+    } else if (mode == "pink_position" || mode == "pink") {
+      ik_mode_ = "pink_position";
+    } else {
+      ik_mode_ = mode;
+    }
     sdk_prev_l_.reset();
     sdk_prev_r_.reset();
-    RCLCPP_INFO(get_logger(), "[vive_rby1] IK mode -- %s", ik_mode_.c_str());
+    RCLCPP_INFO(
+      get_logger(), "[vive_rby1] IK mode -- raw=%s normalized=%s",
+      msg->data.c_str(), ik_mode_.c_str());
   }
 
   void onMirrorMode(const std_msgs::msg::String::SharedPtr msg) {
