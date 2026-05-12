@@ -255,6 +255,7 @@ class ViveRby1Node : public rclcpp::Node {
     declare_parameter("sdk_max_delta_pos", 0.03);
     declare_parameter("sdk_max_delta_rot_deg", 20.0);
     declare_parameter("pedal_engage_index", 0);
+    declare_parameter("pedal_discard_index", 1);
     declare_parameter("pedal_episode_index", 2);
 
     const auto urdf_path = get_parameter("urdf_path").as_string();
@@ -270,7 +271,8 @@ class ViveRby1Node : public rclcpp::Node {
     publish_rate_ = get_parameter("publish_rate").as_double();
     sdk_max_delta_pos_ = get_parameter("sdk_max_delta_pos").as_double();
     sdk_max_delta_rot_ = get_parameter("sdk_max_delta_rot_deg").as_double() * kPi / 180.0;
-    pedal_engage_idx_ = static_cast<size_t>(get_parameter("pedal_engage_index").as_int());
+    pedal_engage_idx_  = static_cast<size_t>(get_parameter("pedal_engage_index").as_int());
+    pedal_discard_idx_ = static_cast<size_t>(get_parameter("pedal_discard_index").as_int());
     pedal_episode_idx_ = static_cast<size_t>(get_parameter("pedal_episode_index").as_int());
 
     ik_solver_ = std::make_unique<DifferentialIkSolver>(urdf_path, srdf_path);
@@ -447,6 +449,13 @@ class ViveRby1Node : public rclcpp::Node {
     }
     pedal_engage_prev_ = engage_pressed;
 
+    const bool discard_pressed =
+      pedal_discard_idx_ < msg->buttons.size() && static_cast<bool>(msg->buttons[pedal_discard_idx_]);
+    if (discard_pressed && !pedal_discard_prev_) {
+      discardEpisode();
+    }
+    pedal_discard_prev_ = discard_pressed;
+
     const bool episode_pressed =
       pedal_episode_idx_ < msg->buttons.size() && static_cast<bool>(msg->buttons[pedal_episode_idx_]);
     if (episode_pressed && !pedal_episode_prev_) {
@@ -489,6 +498,39 @@ class ViveRby1Node : public rclcpp::Node {
     if (rec_state_ == kRecRecording) {
       callTogglePause();
     }
+  }
+
+  void discardEpisode() {
+    if (rec_state_ == kRecIdle) {
+      RCLCPP_WARN(get_logger(), "discardEpisode: no active episode");
+      return;
+    }
+    if (!cli_end_rec_->service_is_ready()) {
+      RCLCPP_WARN(get_logger(), "EndRecording service not available -- force resetting state");
+      rec_state_ = kRecIdle;
+      rec_episode_ = -1;
+      engaged_ = false;
+      publishClutchState();
+      publishRecState();
+      return;
+    }
+    if (engaged_) { disengage(); }
+    auto req = std::make_shared<EndRecording::Request>();
+    req->discard = true;
+    cli_end_rec_->async_send_request(
+      req, [this](rclcpp::Client<EndRecording>::SharedFuture future) {
+        const auto result = future.get();
+        if (result->result) {
+          rec_state_ = kRecIdle;
+          rec_episode_ = -1;
+          engaged_ = false;
+          RCLCPP_INFO(get_logger(), "[vive_rby1] Episode DISCARDED -- teleop_stop -- ready_pose");
+          sendRby1Command("teleop_stop", "ready_pose", nullptr);
+        } else {
+          RCLCPP_ERROR(get_logger(), "discardEpisode failed: %s", result->message.c_str());
+        }
+        publishRecState();
+      });
   }
 
   void toggleEpisode() {
@@ -892,6 +934,7 @@ class ViveRby1Node : public rclcpp::Node {
   bool teleop_active_{false};
   bool engaged_{false};
   bool pedal_engage_prev_{false};
+  bool pedal_discard_prev_{false};
   bool pedal_episode_prev_{false};
 
   double pos_scale_{1.0};
@@ -901,6 +944,7 @@ class ViveRby1Node : public rclcpp::Node {
   double sdk_max_delta_rot_{20.0 * kPi / 180.0};
   double tracker_smooth_alpha_{0.9};
   size_t pedal_engage_idx_{0};
+  size_t pedal_discard_idx_{1};
   size_t pedal_episode_idx_{2};
 };
 
