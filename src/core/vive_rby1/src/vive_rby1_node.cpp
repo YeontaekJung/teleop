@@ -660,6 +660,11 @@ class ViveRby1Node : public rclcpp::Node {
             RCLCPP_ERROR(
               get_logger(), "rby1_command \"%s\" failed -- stream may have expired",
               command.c_str());
+            if (rec_state_ == kRecArming) {
+              rec_state_ = kRecIdle;
+              rec_episode_ = -1;
+              publishRecState();
+            }
           }
         }
         if (on_complete) {
