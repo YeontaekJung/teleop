@@ -644,6 +644,7 @@ class TeleopGuiWindow(QWidget):
             self._btn_rec.setStyleSheet(
                 'background-color: #888; color: white; font-weight: bold;')
             self._btn_rec.setEnabled(False)
+            self._warmup_poll_count = 0
             self._timer_warmup_poll.start(500)
         else:
             self._btn_rec.setText('■  End Episode')
@@ -652,6 +653,11 @@ class TeleopGuiWindow(QWidget):
             self._btn_rec.setEnabled(state in ('READY', 'PAUSED'))
 
     def _poll_warmup_ready(self):
+        self._warmup_poll_count += 1
+        # Fallback: give up waiting after ~30 s and just enable the button
+        if self._warmup_poll_count > 60:
+            self._sig.warmup_ready.emit()
+            return
         if not self._node._status_client.service_is_ready():
             return
         future = self._node._status_client.call_async(GetStatus.Request())
