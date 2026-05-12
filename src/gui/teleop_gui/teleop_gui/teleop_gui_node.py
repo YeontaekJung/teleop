@@ -25,7 +25,6 @@ from rclpy.node import Node
 from sensor_msgs.msg import Joy
 from std_msgs.msg import Int32, String
 from std_srvs.srv import Trigger
-from scm_recording_msgs.srv import GetStatus
 
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout,
@@ -48,6 +47,7 @@ NODES_TO_WATCH = [
 
 REC_STATE_STYLE = {
     'IDLE':      ('⬤ IDLE',      '#888888'),
+    'ARMING':    ('⬤ ARMING',    '#5555CC'),
     'READY':     ('⬤ READY',     '#F0C040'),
     'RECORDING': ('⬤ RECORDING', '#E0302A'),
     'PAUSED':    ('⬤ PAUSED',    '#E08020'),
@@ -86,7 +86,6 @@ class TeleopGuiNode(Node):
 
         self._calib_client     = self.create_client(Trigger, '/manus_inspire/calibrate')
         self._toggle_ep_client = self.create_client(Trigger, '/vive_rby1/toggle_episode')
-        self._status_client    = self.create_client(GetStatus, '/scm_recording/get_status')
 
         self._pub_task_id      = self.create_publisher(Int32,  '/teleop/task_id',      10)
         self._pub_control_mode = self.create_publisher(String, '/teleop/control_mode', 10)
@@ -178,7 +177,6 @@ class Signals(QObject):
     tracker_status_changed = Signal(str, str)
     rby1_status_changed    = Signal(dict)
     clutch_state_changed   = Signal(str)
-    warmup_ready           = Signal()
 
 
 # ---------------------------------------------------------------------------
@@ -226,7 +224,6 @@ class TeleopGuiWindow(QWidget):
         signals.tracker_status_changed.connect(self._on_tracker_status)
         signals.rby1_status_changed.connect(self._on_rby1_status)
         signals.clutch_state_changed.connect(self._on_clutch_state)
-        signals.warmup_ready.connect(self._on_warmup_ready)
 
         self._build_ui()
 
@@ -504,9 +501,6 @@ class TeleopGuiWindow(QWidget):
         self._lbl_rec_state.setFont(QFont('Monospace', 12))
         self._lbl_rec_state.setStyleSheet('color: #888;')
 
-        self._timer_warmup_poll = QTimer()
-        self._timer_warmup_poll.timeout.connect(self._poll_warmup_ready)
-
         task_row = QHBoxLayout()
         task_row.addWidget(QLabel('task_id'))
         self._spin_task = QSpinBox()
@@ -619,9 +613,8 @@ class TeleopGuiWindow(QWidget):
             f'background-color: {color}; color: white; border-radius: 4px; padding: 0 6px;')
 
     def _on_rec_state(self, state: str):
-        prev            = self._rec_state
         self._rec_state = state
-        text, color     = REC_STATE_STYLE.get(state, ('⬤ ' + state, '#888'))
+        text, color = REC_STATE_STYLE.get(state, ('⬤ ' + state, '#888'))
         self._lbl_rec_state.setText(text)
         self._lbl_rec_state.setStyleSheet(f'color: {color};')
 
@@ -633,50 +626,21 @@ class TeleopGuiWindow(QWidget):
             w.setEnabled(is_idle)
 
         if is_idle:
-            self._timer_warmup_poll.stop()
             self._btn_rec.setText('▶  Start Episode')
             self._btn_rec.setStyleSheet(
                 'background-color: #4CAF50; color: white; font-weight: bold;')
             self._btn_rec.setEnabled(True)
             self._lbl_episode.setText('—')
-        elif prev == 'IDLE' and state == 'READY':
+        elif state == 'ARMING':
             self._btn_rec.setText('Warming up...')
             self._btn_rec.setStyleSheet(
                 'background-color: #888; color: white; font-weight: bold;')
             self._btn_rec.setEnabled(False)
-            self._warmup_poll_count = 0
-            self._timer_warmup_poll.start(500)
         else:
             self._btn_rec.setText('■  End Episode')
             self._btn_rec.setStyleSheet(
                 'background-color: #E53935; color: white; font-weight: bold;')
             self._btn_rec.setEnabled(state in ('READY', 'PAUSED'))
-
-    def _poll_warmup_ready(self):
-        self._warmup_poll_count += 1
-        # Fallback: give up waiting after ~30 s and just enable the button
-        if self._warmup_poll_count > 60:
-            self._sig.warmup_ready.emit()
-            return
-        if not self._node._status_client.service_is_ready():
-            return
-        future = self._node._status_client.call_async(GetStatus.Request())
-        future.add_done_callback(self._on_warmup_status)
-
-    def _on_warmup_status(self, future):
-        try:
-            res = future.result()
-        except Exception:
-            return
-        if res.state == 'READY':
-            self._sig.warmup_ready.emit()
-
-    def _on_warmup_ready(self):
-        self._timer_warmup_poll.stop()
-        self._btn_rec.setText('■  End Episode')
-        self._btn_rec.setStyleSheet(
-            'background-color: #E53935; color: white; font-weight: bold;')
-        self._btn_rec.setEnabled(True)
 
     def _on_rec_episode(self, episode: int):
         self._lbl_episode.setText(str(episode) if episode >= 0 else '—')

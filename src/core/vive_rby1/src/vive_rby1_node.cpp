@@ -49,6 +49,7 @@ namespace {
 using namespace std::chrono_literals;
 
 constexpr char kRecIdle[] = "IDLE";
+constexpr char kRecArming[] = "ARMING";
 constexpr char kRecReady[] = "READY";
 constexpr char kRecRecording[] = "RECORDING";
 constexpr char kRecPaused[] = "PAUSED";
@@ -545,10 +546,10 @@ class ViveRby1Node : public rclcpp::Node {
         req, [this](rclcpp::Client<StartRecording>::SharedFuture future) {
           const auto result = future.get();
           if (result->result) {
-            rec_state_ = kRecReady;
+            rec_state_ = kRecArming;
             rec_episode_ = result->episode_id;
             RCLCPP_INFO(
-              get_logger(), "[vive_rby1] READY -- task %d ep %d", result->task_id, result->episode_id);
+              get_logger(), "[vive_rby1] ARMING -- task %d ep %d", result->task_id, result->episode_id);
             warmup_ticks_ = static_cast<int>(publish_rate_);
             std::string start_cmd = "teleop_start";
             if (ik_mode_ == "pink_impedance") {
@@ -779,7 +780,11 @@ class ViveRby1Node : public rclcpp::Node {
     pub_tracker_status_->publish(tracker_msg);
 
     if (warmup_ticks_ > 0) {
-      --warmup_ticks_;
+      if (--warmup_ticks_ == 0) {
+        rec_state_ = kRecReady;
+        publishRecState();
+        RCLCPP_INFO(get_logger(), "[vive_rby1] Warmup done -- READY");
+      }
       if (ik_mode_.rfind("sdk_", 0) != 0) {
         publishQ20(ik_solver_->currentQ20());
       } else if (last_ee_pose_) {
