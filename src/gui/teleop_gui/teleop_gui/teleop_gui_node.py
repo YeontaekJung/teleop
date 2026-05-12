@@ -25,6 +25,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import Joy
 from std_msgs.msg import Int32, String
 from std_srvs.srv import Trigger
+from scm_recording_msgs.srv import GetStatus
 
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout,
@@ -85,6 +86,7 @@ class TeleopGuiNode(Node):
 
         self._calib_client     = self.create_client(Trigger, '/manus_inspire/calibrate')
         self._toggle_ep_client = self.create_client(Trigger, '/vive_rby1/toggle_episode')
+        self._status_client    = self.create_client(GetStatus, '/scm_recording/get_status')
 
         self._pub_task_id      = self.create_publisher(Int32,  '/teleop/task_id',      10)
         self._pub_control_mode = self.create_publisher(String, '/teleop/control_mode', 10)
@@ -500,9 +502,8 @@ class TeleopGuiWindow(QWidget):
         self._lbl_rec_state.setFont(QFont('Monospace', 12))
         self._lbl_rec_state.setStyleSheet('color: #888;')
 
-        self._timer_rec_countdown = QTimer()
-        self._timer_rec_countdown.timeout.connect(self._tick_countdown)
-        self._rec_countdown = 0
+        self._timer_warmup_poll = QTimer()
+        self._timer_warmup_poll.timeout.connect(self._poll_warmup_ready)
 
         task_row = QHBoxLayout()
         task_row.addWidget(QLabel('task_id'))
@@ -630,31 +631,37 @@ class TeleopGuiWindow(QWidget):
             w.setEnabled(is_idle)
 
         if is_idle:
-            self._timer_rec_countdown.stop()
+            self._timer_warmup_poll.stop()
             self._btn_rec.setText('▶  Start Episode')
             self._btn_rec.setStyleSheet(
                 'background-color: #4CAF50; color: white; font-weight: bold;')
             self._btn_rec.setEnabled(True)
             self._lbl_episode.setText('—')
         elif prev == 'IDLE' and state == 'READY':
-            self._btn_rec.setText('Starting in 3...')
+            self._btn_rec.setText('Warming up...')
             self._btn_rec.setStyleSheet(
                 'background-color: #888; color: white; font-weight: bold;')
             self._btn_rec.setEnabled(False)
-            self._rec_countdown = 3
-            self._timer_rec_countdown.start(1000)
+            self._timer_warmup_poll.start(500)
         else:
             self._btn_rec.setText('■  End Episode')
             self._btn_rec.setStyleSheet(
                 'background-color: #E53935; color: white; font-weight: bold;')
             self._btn_rec.setEnabled(state in ('READY', 'PAUSED'))
 
-    def _tick_countdown(self):
-        self._rec_countdown -= 1
-        if self._rec_countdown > 0:
-            self._btn_rec.setText(f'Starting in {self._rec_countdown}...')
-        else:
-            self._timer_rec_countdown.stop()
+    def _poll_warmup_ready(self):
+        if not self._node._status_client.service_is_ready():
+            return
+        future = self._node._status_client.call_async(GetStatus.Request())
+        future.add_done_callback(self._on_warmup_status)
+
+    def _on_warmup_status(self, future):
+        try:
+            res = future.result()
+        except Exception:
+            return
+        if res.state == 'READY':
+            self._timer_warmup_poll.stop()
             self._btn_rec.setText('■  End Episode')
             self._btn_rec.setStyleSheet(
                 'background-color: #E53935; color: white; font-weight: bold;')
