@@ -650,6 +650,12 @@ class ViveRby1Node : public rclcpp::Node {
           command == "sdk_position_teleop_start" || command == "sdk_impedance_teleop_start")
         {
           teleop_active_ = succeeded;
+          if (succeeded && rec_state_ == kRecArming) {
+            warmup_ticks_ = 0;
+            rec_state_ = kRecReady;
+            publishRecState();
+            RCLCPP_INFO(get_logger(), "[vive_rby1] Stream open -- READY");
+          }
           if (!succeeded) {
             RCLCPP_ERROR(
               get_logger(), "rby1_command \"%s\" failed -- stream may have expired",
@@ -780,11 +786,7 @@ class ViveRby1Node : public rclcpp::Node {
     pub_tracker_status_->publish(tracker_msg);
 
     if (warmup_ticks_ > 0) {
-      if (--warmup_ticks_ == 0) {
-        rec_state_ = kRecReady;
-        publishRecState();
-        RCLCPP_INFO(get_logger(), "[vive_rby1] Warmup done -- READY");
-      }
+      --warmup_ticks_;
       if (ik_mode_.rfind("sdk_", 0) != 0) {
         publishQ20(ik_solver_->currentQ20());
       } else if (last_ee_pose_) {
