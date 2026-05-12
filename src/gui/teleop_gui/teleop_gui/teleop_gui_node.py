@@ -178,6 +178,7 @@ class Signals(QObject):
     tracker_status_changed = Signal(str, str)
     rby1_status_changed    = Signal(dict)
     clutch_state_changed   = Signal(str)
+    warmup_ready           = Signal()
 
 
 # ---------------------------------------------------------------------------
@@ -225,6 +226,7 @@ class TeleopGuiWindow(QWidget):
         signals.tracker_status_changed.connect(self._on_tracker_status)
         signals.rby1_status_changed.connect(self._on_rby1_status)
         signals.clutch_state_changed.connect(self._on_clutch_state)
+        signals.warmup_ready.connect(self._on_warmup_ready)
 
         self._build_ui()
 
@@ -661,11 +663,14 @@ class TeleopGuiWindow(QWidget):
         except Exception:
             return
         if res.state == 'READY':
-            self._timer_warmup_poll.stop()
-            self._btn_rec.setText('■  End Episode')
-            self._btn_rec.setStyleSheet(
-                'background-color: #E53935; color: white; font-weight: bold;')
-            self._btn_rec.setEnabled(True)
+            self._sig.warmup_ready.emit()
+
+    def _on_warmup_ready(self):
+        self._timer_warmup_poll.stop()
+        self._btn_rec.setText('■  End Episode')
+        self._btn_rec.setStyleSheet(
+            'background-color: #E53935; color: white; font-weight: bold;')
+        self._btn_rec.setEnabled(True)
 
     def _on_rec_episode(self, episode: int):
         self._lbl_episode.setText(str(episode) if episode >= 0 else '—')
