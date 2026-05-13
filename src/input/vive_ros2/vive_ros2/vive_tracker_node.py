@@ -83,7 +83,7 @@ def get_rotation_to_align_stations(p1_ros: np.ndarray, p2_ros: np.ndarray) -> np
 
 class ViveTrackerNode(Node):
 
-    DEVICE_NAMES = ['station_left', 'station_right', 'tracker_left', 'tracker_right']
+    DEVICE_NAMES = ['station_left', 'station_right', 'tracker_left', 'tracker_right', 'tracker_body']
 
     def __init__(self):
         super().__init__('vive_tracker_node')
@@ -93,9 +93,11 @@ class ViveTrackerNode(Node):
         self.declare_parameter('serial_station_right', 'LHB-ACA3FF29')
         self.declare_parameter('serial_tracker_left',  'LHR-83AA739B')
         self.declare_parameter('serial_tracker_right', 'LHR-22E4DDD6')
+        self.declare_parameter('serial_tracker_body',  '')
         self.declare_parameter('publish_rate',         100.0)
         self.declare_parameter('topic_tracker_left',   '/teleop/tracker/left')
         self.declare_parameter('topic_tracker_right',  '/teleop/tracker/right')
+        self.declare_parameter('topic_tracker_body',   '/teleop/tracker/body')
 
         serials = {
             'station_left':  self.get_parameter('serial_station_left').value,
@@ -103,6 +105,10 @@ class ViveTrackerNode(Node):
             'tracker_left':  self.get_parameter('serial_tracker_left').value,
             'tracker_right': self.get_parameter('serial_tracker_right').value,
         }
+        serial_body = self.get_parameter('serial_tracker_body').value
+        if serial_body:
+            serials['tracker_body'] = serial_body
+
         # reverse map: serial → name
         self._serial_to_name = {v: k for k, v in serials.items()}
         self._name_to_idx = {n: i for i, n in enumerate(self.DEVICE_NAMES)}
@@ -110,15 +116,17 @@ class ViveTrackerNode(Node):
         rate_hz = self.get_parameter('publish_rate').value
         topic_l = self.get_parameter('topic_tracker_left').value
         topic_r = self.get_parameter('topic_tracker_right').value
+        topic_b = self.get_parameter('topic_tracker_body').value
 
         # Publishers
         self._pub_left  = self.create_publisher(PoseStamped, topic_l, 10)
         self._pub_right = self.create_publisher(PoseStamped, topic_r, 10)
+        self._pub_body  = self.create_publisher(PoseStamped, topic_b, 10)
 
-        # Device state: pose (4x4) for each of 4 devices
-        self._T = [None] * 4
-        self._alive = [False] * 4
-        self._alive_prev = [False] * 4
+        # Device state: pose (4x4) for each of 5 devices
+        self._T = [None] * 5
+        self._alive = [False] * 5
+        self._alive_prev = [False] * 5
 
         # Station alignment rotation (3x3, applied to tracker positions/orientations)
         self._station_rot: np.ndarray | None = None
@@ -140,7 +148,7 @@ class ViveTrackerNode(Node):
             openvr.TrackingUniverseStanding, 0, openvr.k_unMaxTrackedDeviceCount
         )
 
-        for i in range(4):
+        for i in range(5):
             self._alive[i] = False
 
         for i, pose in enumerate(poses):
@@ -169,8 +177,8 @@ class ViveTrackerNode(Node):
                     self.get_logger().warn(f'Device disconnected: {name}')
             self._alive_prev[i] = self._alive[i]
 
-        # Both stations (idx 0,1) and both trackers (idx 2,3) must be alive
-        return all(self._alive)
+        # Both stations (idx 0,1) and both hand trackers (idx 2,3) must be alive; body (idx 4) is optional
+        return all(self._alive[:4])
 
     def _make_pose_stamped(self, device_idx: int) -> PoseStamped:
         T = self._T[device_idx]
@@ -208,9 +216,11 @@ class ViveTrackerNode(Node):
             self.get_logger().info('Station alignment computed.')
             self._initialized = True
 
-        # Publish tracker poses (idx 2=left, 3=right)
+        # Publish tracker poses (idx 2=left, 3=right, 4=body optional)
         self._pub_left.publish(self._make_pose_stamped(2))
         self._pub_right.publish(self._make_pose_stamped(3))
+        if self._alive[4]:
+            self._pub_body.publish(self._make_pose_stamped(4))
 
     def destroy_node(self):
         openvr.shutdown()

@@ -5,6 +5,7 @@ vive_tracker_node:
     serial_station_right: "LHB-ACA3FF29"
     serial_tracker_left:  "LHR-83AA739B"
     serial_tracker_right: "LHR-22E4DDD6"
+    serial_tracker_body:  "LHR-25A8547C"
 
     # Publish rate (Hz)
     publish_rate: 100.0
@@ -12,3 +13,4 @@ vive_tracker_node:
     # Topics
     topic_tracker_left:  "/teleop/tracker/left"
     topic_tracker_right: "/teleop/tracker/right"
+    topic_tracker_body:  "/teleop/tracker/body"
