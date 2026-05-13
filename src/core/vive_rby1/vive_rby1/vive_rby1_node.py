@@ -301,6 +301,17 @@ class ViveRby1Node(Node):
 
     def _cb_tracker_b(self, msg: PoseStamped):
         self._tracker_b_se3 = self._smooth_tracker_se3(self._tracker_b_se3, msg)
+        # Lazy init: engage가 body 트래커보다 먼저 일어난 경우
+        if (self._engaged
+                and self._ik_mode == 'sdk_impedance'
+                and self._ref_b is None
+                and self._joint_state is not None):
+            self._ref_b = self._tracker_b_se3
+            q_pin = self._ik.configuration.q
+            fid_torso = self._ik.robot.model.getFrameId('link_torso_5')
+            self._torso_ref_se3 = self._ik.robot.framePlacement(q_pin, fid_torso)
+            self._sdk_prev_torso = None
+            self.get_logger().info('[vive_rby1] body tracker ref captured (lazy)')
 
     def _cb_joint_state(self, msg: JointState):
         self._joint_state = msg
