@@ -136,6 +136,7 @@ class ViveRby1Node(Node):
         self.declare_parameter('srdf_path', '/home/hss/jyi/2026/robot_description/rby1/rby1.srdf')
         self.declare_parameter('topic_tracker_left',   '/teleop/tracker/left')
         self.declare_parameter('topic_tracker_right',  '/teleop/tracker/right')
+        self.declare_parameter('topic_tracker_body',   '/teleop/tracker/body')
         self.declare_parameter('topic_pedal',          '/teleop/pedal')
         self.declare_parameter('topic_joint_state',    '/rby1_status_joint')
         self.declare_parameter('topic_teleop_command', '/rby1_teleop_command')
@@ -151,6 +152,7 @@ class ViveRby1Node(Node):
         srdf_path = self.get_parameter('srdf_path').value
         topic_l   = self.get_parameter('topic_tracker_left').value
         topic_r   = self.get_parameter('topic_tracker_right').value
+        topic_b   = self.get_parameter('topic_tracker_body').value
         topic_p   = self.get_parameter('topic_pedal').value
         topic_js  = self.get_parameter('topic_joint_state').value
         topic_cmd = self.get_parameter('topic_teleop_command').value
@@ -183,6 +185,7 @@ class ViveRby1Node(Node):
         self._tracker_r: PoseStamped | None = None
         self._tracker_l_se3: pin.SE3 | None = None  # smoothed SE3 for IK
         self._tracker_r_se3: pin.SE3 | None = None
+        self._tracker_b_se3: pin.SE3 | None = None  # body tracker (optional)
         self._tracker_smooth_alpha = 0.9  # SLERP alpha for rotation (0=no update, 1=no smoothing)
         self._joint_state: JointState | None = None
 
@@ -204,6 +207,10 @@ class ViveRby1Node(Node):
         self._ee_r_0:  pin.SE3 | None = None
         self._sdk_prev_l: pin.SE3 | None = None
         self._sdk_prev_r: pin.SE3 | None = None
+        # Body tracker clutch state (sdk_impedance only)
+        self._ref_b:        pin.SE3 | None = None
+        self._torso_ref_se3: pin.SE3 | None = None
+        self._sdk_prev_torso: pin.SE3 | None = None
 
         # Recording state
         self._rec_state   = REC_IDLE
@@ -219,6 +226,7 @@ class ViveRby1Node(Node):
         # Subscribers
         self.create_subscription(PoseStamped, topic_l,          self._cb_tracker_l,   10)
         self.create_subscription(PoseStamped, topic_r,          self._cb_tracker_r,   10)
+        self.create_subscription(PoseStamped, topic_b,          self._cb_tracker_b,   10)
         self.create_subscription(Joy,         topic_p,          self._cb_pedal,       10)
         self.create_subscription(JointState,  topic_js,         self._cb_joint_state, 10)
         self.create_subscription(Int32,  '/teleop/task_id',      self._cb_task_id,       10)
@@ -290,6 +298,9 @@ class ViveRby1Node(Node):
         p = msg.pose.position
         self._tracker_buf_r.append([p.x, p.y, p.z])
         self._tracker_r_se3 = self._smooth_tracker_se3(self._tracker_r_se3, msg)
+
+    def _cb_tracker_b(self, msg: PoseStamped):
+        self._tracker_b_se3 = self._smooth_tracker_se3(self._tracker_b_se3, msg)
 
     def _cb_joint_state(self, msg: JointState):
         self._joint_state = msg
@@ -370,6 +381,13 @@ class ViveRby1Node(Node):
         self._sdk_prev_l = None
         self._sdk_prev_r = None
 
+        # Body tracker reference for torso (sdk_impedance only, optional)
+        if self._ik_mode == 'sdk_impedance' and self._tracker_b_se3 is not None:
+            self._ref_b = self._tracker_b_se3
+            fid_torso = self._ik.robot.model.getFrameId('link_torso_5')
+            self._torso_ref_se3 = self._ik.robot.framePlacement(q_pin, fid_torso)
+            self._sdk_prev_torso = None
+
         self._engaged = True
         self.get_logger().info('Clutch ENGAGED')
 
@@ -381,6 +399,9 @@ class ViveRby1Node(Node):
         self._engaged = False
         self._sdk_prev_l = None
         self._sdk_prev_r = None
+        self._ref_b = None
+        self._torso_ref_se3 = None
+        self._sdk_prev_torso = None
         self.get_logger().info('Clutch DISENGAGED')
 
         # Auto-pause recording if currently recording
@@ -641,6 +662,23 @@ class ViveRby1Node(Node):
             pa.header.stamp = self.get_clock().now().to_msg()
             pa.poses.append(se3_to_pose(sdk_r))
             pa.poses.append(se3_to_pose(sdk_l))
+            # Torso target from body tracker (sdk_impedance only)
+            if (self._ik_mode == 'sdk_impedance'
+                    and self._ref_b is not None
+                    and self._torso_ref_se3 is not None
+                    and self._tracker_b_se3 is not None):
+                v2r = self._v2r_R
+                b_now = self._tracker_b_se3
+                delta_pos = v2r @ (b_now.translation - self._ref_b.translation)
+                delta_rot = v2r @ (b_now.rotation @ self._ref_b.rotation.T) @ v2r.T
+                torso_tgt = pin.SE3(
+                    delta_rot @ self._torso_ref_se3.rotation,
+                    self._torso_ref_se3.translation + delta_pos,
+                )
+                sdk_torso = self._limit_sdk_target(self._sdk_prev_torso, torso_tgt, 'torso')
+                if sdk_torso is not None:
+                    self._sdk_prev_torso = sdk_torso
+                    pa.poses.append(se3_to_pose(sdk_torso))
             self._pub_sdk_target.publish(pa)
         else:
             q20 = self._ik.solve_ik_to_q20(l_SE3, r_SE3, self._ik_dt)
