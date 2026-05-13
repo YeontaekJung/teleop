@@ -252,6 +252,7 @@ class ViveRby1Node : public rclcpp::Node {
     declare_parameter("topic_joint_state", "/rby1_status_joint");
     declare_parameter("topic_teleop_command", "/rby1_teleop_command");
     declare_parameter("pos_scale", 1.0);
+    declare_parameter("torso_pos_scale", 1.0);
     declare_parameter("ik_dt", 0.05);
     declare_parameter("publish_rate", 20.0);
     declare_parameter("sdk_max_delta_pos", 0.03);
@@ -270,6 +271,7 @@ class ViveRby1Node : public rclcpp::Node {
     const auto topic_cmd = get_parameter("topic_teleop_command").as_string();
 
     pos_scale_ = get_parameter("pos_scale").as_double();
+    torso_pos_scale_ = get_parameter("torso_pos_scale").as_double();
     ik_dt_ = get_parameter("ik_dt").as_double();
     publish_rate_ = get_parameter("publish_rate").as_double();
     sdk_max_delta_pos_ = get_parameter("sdk_max_delta_pos").as_double();
@@ -887,11 +889,16 @@ class ViveRby1Node : public rclcpp::Node {
       msg.poses.push_back(se3ToPose(*sdk_r));
       msg.poses.push_back(se3ToPose(*sdk_l));
       if (ref_body_ && torso5_0_ && tracker_b_.smoothed) {
-        const Eigen::Vector3d delta_b = v2r_R_ * (tracker_b_.smoothed->translation() - ref_body_->translation());
+        Eigen::Vector3d delta_b = v2r_R_ * (tracker_b_.smoothed->translation() - ref_body_->translation());
         const Eigen::Matrix3d dR_b = tracker_b_.smoothed->rotation() * ref_body_->rotation().transpose();
-        const Eigen::Matrix3d dR_b_robot = v2r_R_ * dR_b * v2r_R_.transpose();
+        Eigen::Matrix3d dR_b_robot = v2r_R_ * dR_b * v2r_R_.transpose();
+        if (mirror_mode_) {
+          const Eigen::Matrix3d mf = (Eigen::Vector3d(1., -1., 1.)).asDiagonal();
+          delta_b = mf * delta_b;
+          dR_b_robot = mf * dR_b_robot * mf;
+        }
         const pinocchio::SE3 torso_target(dR_b_robot * torso5_0_->rotation(),
-                                          torso5_0_->translation() + delta_b);
+                                          torso5_0_->translation() + torso_pos_scale_ * delta_b);
         msg.poses.push_back(se3ToPose(torso_target));
       }
       pub_sdk_target_->publish(msg);
@@ -982,6 +989,7 @@ class ViveRby1Node : public rclcpp::Node {
   bool pedal_episode_prev_{false};
 
   double pos_scale_{1.0};
+  double torso_pos_scale_{1.0};
   double ik_dt_{0.05};
   double publish_rate_{20.0};
   double sdk_max_delta_pos_{0.03};
