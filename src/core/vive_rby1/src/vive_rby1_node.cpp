@@ -245,8 +245,9 @@ class ViveRby1Node : public rclcpp::Node {
     v2r_R_((Eigen::Matrix3d() << 0., 1., 0., -1., 0., 0., 0., 0., 1.).finished()) {
     declare_parameter("urdf_path", "/home/hss/jyi/2026/robot_description/rby1/rby1.urdf");
     declare_parameter("srdf_path", "/home/hss/jyi/2026/robot_description/rby1/rby1.srdf");
-    declare_parameter("topic_tracker_left", "/teleop/tracker/left");
+    declare_parameter("topic_tracker_left",  "/teleop/tracker/left");
     declare_parameter("topic_tracker_right", "/teleop/tracker/right");
+    declare_parameter("topic_tracker_body",  "/teleop/tracker/body");
     declare_parameter("topic_pedal", "/teleop/pedal");
     declare_parameter("topic_joint_state", "/rby1_status_joint");
     declare_parameter("topic_teleop_command", "/rby1_teleop_command");
@@ -263,6 +264,7 @@ class ViveRby1Node : public rclcpp::Node {
     const auto srdf_path = get_parameter("srdf_path").as_string();
     const auto topic_l = get_parameter("topic_tracker_left").as_string();
     const auto topic_r = get_parameter("topic_tracker_right").as_string();
+    const auto topic_b = get_parameter("topic_tracker_body").as_string();
     const auto topic_p = get_parameter("topic_pedal").as_string();
     const auto topic_js = get_parameter("topic_joint_state").as_string();
     const auto topic_cmd = get_parameter("topic_teleop_command").as_string();
@@ -283,6 +285,8 @@ class ViveRby1Node : public rclcpp::Node {
       topic_l, 10, std::bind(&ViveRby1Node::onTrackerLeft, this, std::placeholders::_1));
     sub_tracker_r_ = create_subscription<geometry_msgs::msg::PoseStamped>(
       topic_r, 10, std::bind(&ViveRby1Node::onTrackerRight, this, std::placeholders::_1));
+    sub_tracker_b_ = create_subscription<geometry_msgs::msg::PoseStamped>(
+      topic_b, 10, std::bind(&ViveRby1Node::onTrackerBody, this, std::placeholders::_1));
     sub_pedal_ = create_subscription<sensor_msgs::msg::Joy>(
       topic_p, 10, std::bind(&ViveRby1Node::onPedal, this, std::placeholders::_1));
     sub_joint_state_ = create_subscription<sensor_msgs::msg::JointState>(
@@ -360,6 +364,16 @@ class ViveRby1Node : public rclcpp::Node {
       tracker_r_.buf.pop_front();
     }
     tracker_r_.smoothed = smoothTracker(tracker_r_.smoothed, *msg);
+  }
+
+  void onTrackerBody(const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
+    tracker_b_.raw = msg;
+    tracker_b_.stamp_sec = nowSec();
+    tracker_b_.buf.push_back(Eigen::Vector3d(msg->pose.position.x, msg->pose.position.y, msg->pose.position.z));
+    while (tracker_b_.buf.size() > 20) {
+      tracker_b_.buf.pop_front();
+    }
+    tracker_b_.smoothed = smoothTracker(tracker_b_.smoothed, *msg);
   }
 
   void onJointState(const sensor_msgs::msg::JointState::SharedPtr msg) {
@@ -476,6 +490,10 @@ class ViveRby1Node : public rclcpp::Node {
     ee_r_0_ = ik_solver_->framePlacement("tracker_right");
     sdk_ee_l_0_ = ik_solver_->framePlacement("ee_left");
     sdk_ee_r_0_ = ik_solver_->framePlacement("ee_right");
+    if (tracker_b_.smoothed) {
+      ref_body_   = tracker_b_.smoothed;
+      torso5_0_   = ik_solver_->framePlacement("link_torso_5");
+    }
     // SDK FK(rby1_rt) vs pinocchio FK(공칭 URDF) 간 Z 오프셋 보정
     // 측정값(ready pose): 우 +2.6cm, 좌 +3.9cm (SDK FK가 더 높음)
     sdk_ee_r_0_->translation().z() += 0.026;
@@ -494,6 +512,8 @@ class ViveRby1Node : public rclcpp::Node {
     engaged_ = false;
     sdk_prev_l_.reset();
     sdk_prev_r_.reset();
+    ref_body_.reset();
+    torso5_0_.reset();
     publishClutchState();
     RCLCPP_INFO(get_logger(), "Clutch DISENGAGED");
     if (rec_state_ == kRecRecording) {
@@ -866,6 +886,14 @@ class ViveRby1Node : public rclcpp::Node {
       msg.header.stamp = now();
       msg.poses.push_back(se3ToPose(*sdk_r));
       msg.poses.push_back(se3ToPose(*sdk_l));
+      if (ref_body_ && torso5_0_ && tracker_b_.smoothed) {
+        const Eigen::Vector3d delta_b = v2r_R_ * (tracker_b_.smoothed->translation() - ref_body_->translation());
+        const Eigen::Matrix3d dR_b = tracker_b_.smoothed->rotation() * ref_body_->rotation().transpose();
+        const Eigen::Matrix3d dR_b_robot = v2r_R_ * dR_b * v2r_R_.transpose();
+        const pinocchio::SE3 torso_target(dR_b_robot * torso5_0_->rotation(),
+                                          torso5_0_->translation() + delta_b);
+        msg.poses.push_back(se3ToPose(torso_target));
+      }
       pub_sdk_target_->publish(msg);
       return;
     }
@@ -898,6 +926,7 @@ class ViveRby1Node : public rclcpp::Node {
 
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr sub_tracker_l_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr sub_tracker_r_;
+  rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr sub_tracker_b_;
   rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr sub_pedal_;
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr sub_joint_state_;
   rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr sub_task_id_;
@@ -923,6 +952,7 @@ class ViveRby1Node : public rclcpp::Node {
 
   TrackerState tracker_l_;
   TrackerState tracker_r_;
+  TrackerState tracker_b_;
   sensor_msgs::msg::JointState::SharedPtr joint_state_;
   std::optional<pinocchio::SE3> ref_l_;
   std::optional<pinocchio::SE3> ref_r_;
@@ -932,6 +962,8 @@ class ViveRby1Node : public rclcpp::Node {
   std::optional<pinocchio::SE3> sdk_ee_r_0_;   // SDK 모드용 ee_right 초기 참조
   std::optional<pinocchio::SE3> sdk_prev_l_;
   std::optional<pinocchio::SE3> sdk_prev_r_;
+  std::optional<pinocchio::SE3> ref_body_;
+  std::optional<pinocchio::SE3> torso5_0_;
 
   Eigen::Matrix3d v2r_R_;
 
