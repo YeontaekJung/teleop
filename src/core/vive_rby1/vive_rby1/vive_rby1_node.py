@@ -387,6 +387,10 @@ class ViveRby1Node(Node):
             fid_torso = self._ik.robot.model.getFrameId('link_torso_5')
             self._torso_ref_se3 = self._ik.robot.framePlacement(q_pin, fid_torso)
             self._sdk_prev_torso = None
+            self.get_logger().info('[vive_rby1] torso ref captured at engage')
+        else:
+            self.get_logger().warn(
+                f'[vive_rby1] torso ref NOT captured: mode={self._ik_mode} tracker_b={self._tracker_b_se3 is not None}')
 
         self._engaged = True
         self.get_logger().info('Clutch ENGAGED')
