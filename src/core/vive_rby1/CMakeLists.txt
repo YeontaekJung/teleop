@@ -6,6 +6,7 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 endif()
 
 find_package(ament_cmake REQUIRED)
+find_package(ament_index_cpp REQUIRED)
 find_package(ament_cmake_python REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_action REQUIRED)
@@ -34,6 +35,7 @@ else()
 endif()
 
 ament_target_dependencies(vive_rby1_node
+  ament_index_cpp
   rclcpp
   rclcpp_action
   geometry_msgs
@@ -57,6 +59,10 @@ install(PROGRAMS
 )
 
 install(DIRECTORY config
+  DESTINATION share/${PROJECT_NAME}
+)
+
+install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../../../robot_description
   DESTINATION share/${PROJECT_NAME}
 )
 

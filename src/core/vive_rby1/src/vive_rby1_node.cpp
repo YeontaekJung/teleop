@@ -33,6 +33,7 @@
 #include "pinocchio/parsers/urdf.hpp"
 #include "pinocchio/spatial/explog.hpp"
 #include "rby1_core_msgs/action/rby1_command.hpp"
+#include "ament_index_cpp/get_package_share_directory.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
 #include "scm_recording_msgs/srv/end_recording.hpp"
@@ -243,8 +244,9 @@ class ViveRby1Node : public rclcpp::Node {
   ViveRby1Node()
   : Node("vive_rby1_node"),
     v2r_R_((Eigen::Matrix3d() << 0., 1., 0., -1., 0., 0., 0., 0., 1.).finished()) {
-    declare_parameter("urdf_path", "/home/hss/jyi/2026/robot_description/rby1/rby1.urdf");
-    declare_parameter("srdf_path", "/home/hss/jyi/2026/robot_description/rby1/rby1.srdf");
+    const std::string share = ament_index_cpp::get_package_share_directory("vive_rby1");
+    declare_parameter("urdf_path", share + "/robot_description/rby1/rby1.urdf");
+    declare_parameter("srdf_path", share + "/robot_description/rby1/rby1.srdf");
     declare_parameter("topic_tracker_left",  "/teleop/tracker/left");
     declare_parameter("topic_tracker_right", "/teleop/tracker/right");
     declare_parameter("topic_tracker_body",  "/teleop/tracker/body");
