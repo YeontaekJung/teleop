@@ -80,7 +80,7 @@ class TeleopGuiNode(Node):
         self.create_subscription(String, '/teleop/rec_state',      self._cb_rec_state,      10)
         self.create_subscription(Int32,  '/teleop/rec_episode',    self._cb_rec_episode,    10)
         self.create_subscription(String, '/teleop/tracker_status', self._cb_tracker_status, 10)
-        self.create_subscription(String, '/rby1_status',           self._cb_rby1_status,    10)
+        self.create_subscription(String, '/rby1/state/status',     self._cb_rby1_status,    10)
         self.create_subscription(String, '/teleop/clutch_state',   self._cb_clutch_state,   10)
         self.create_timer(1.0, self._poll_nodes)
 

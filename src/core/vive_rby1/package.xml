@@ -21,7 +21,6 @@
   <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>
   <depend>std_srvs</depend>
-  <depend>interbotix_xs_msgs</depend>
   <depend>rby1_core_msgs</depend>
   <depend>scm_recording_msgs</depend>
   <depend>eigen</depend>

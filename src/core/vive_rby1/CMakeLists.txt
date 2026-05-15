@@ -14,7 +14,6 @@ find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
-find_package(interbotix_xs_msgs REQUIRED)
 find_package(rby1_core_msgs REQUIRED)
 find_package(scm_recording_msgs REQUIRED)
 find_package(Eigen3 REQUIRED)
@@ -42,7 +41,6 @@ ament_target_dependencies(vive_rby1_node
   sensor_msgs
   std_msgs
   std_srvs
-  interbotix_xs_msgs
   rby1_core_msgs
   scm_recording_msgs
 )
