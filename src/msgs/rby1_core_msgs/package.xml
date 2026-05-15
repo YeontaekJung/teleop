@@ -3,23 +3,23 @@
 <package format="3">
   <name>rby1_core_msgs</name>
   <version>0.1.0</version>
-  <description>RB-Y1 core action and service definitions.</description>
-  <maintainer email="todo@todo.com">todo</maintainer>
-  <license>MIT</license>
+  <description>RB-Y1 core message, service, and action definitions for hw-core and teleop.</description>
+  <maintainer email="jungyt92@gmail.com">YeontaekJung</maintainer>
+  <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
   <buildtool_depend>rosidl_default_generators</buildtool_depend>
 
   <build_depend>builtin_interfaces</build_depend>
   <build_depend>std_msgs</build_depend>
+  <build_depend>geometry_msgs</build_depend>
   <build_depend>sensor_msgs</build_depend>
 
   <exec_depend>rosidl_default_runtime</exec_depend>
   <exec_depend>builtin_interfaces</exec_depend>
-  <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>std_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
-  <exec_depend>moveit_msgs</exec_depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

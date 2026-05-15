@@ -1,5 +1,0 @@
-string group_name
-string[] ee_names
-geometry_msgs/Pose[] ee_poses
----
-moveit_msgs/MotionPlanResponse motion_plan_response

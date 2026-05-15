@@ -1,0 +1,10 @@
+# source: "joint"     -> joint-space control (Topic /rby1/cmd/joint or trajectory action)
+#         "cartesian" -> Cartesian control  (Topic /rby1/cmd/pose)
+# control: "position"  -> JointPosition / CartesianPosition builder
+#          "impedance" -> JointImpedance / CartesianImpedance builder
+# Switching mode stops and restarts the SDK stream.
+string source
+string control
+---
+bool success
+string message

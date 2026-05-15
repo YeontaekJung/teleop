@@ -1,0 +1,26 @@
+teleop_pose: ready
+
+named_poses:
+  zero:
+    joint_names: [torso_0, torso_1, torso_2, torso_3, torso_4, torso_5,
+                  right_arm_0, right_arm_1, right_arm_2, right_arm_3, right_arm_4, right_arm_5, right_arm_6,
+                  left_arm_0,  left_arm_1,  left_arm_2,  left_arm_3,  left_arm_4,  left_arm_5,  left_arm_6]
+    positions: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+  ready:
+    joint_names: [torso_0, torso_1, torso_2, torso_3, torso_4, torso_5,
+                  right_arm_0, right_arm_1, right_arm_2, right_arm_3, right_arm_4, right_arm_5, right_arm_6,
+                  left_arm_0,  left_arm_1,  left_arm_2,  left_arm_3,  left_arm_4,  left_arm_5,  left_arm_6]
+    positions: [0.0,  0.5236,  -1.0472,  0.5236, 0.0, 0.0,
+                -0.1515, -0.1721,  0.0330, -1.8145,  0.0065,  0.3852, -0.1806,
+                -0.1515,  0.1721, -0.0330, -1.8145, -0.0065,  0.3852,  0.1806]
+
+  vla:
+    joint_names: [torso_0, torso_1, torso_2, torso_3, torso_4, torso_5,
+                  right_arm_0, right_arm_1, right_arm_2, right_arm_3, right_arm_4, right_arm_5, right_arm_6,
+                  left_arm_0,  left_arm_1,  left_arm_2,  left_arm_3,  left_arm_4,  left_arm_5,  left_arm_6]
+    positions: [0.0, -0.223,  0.497,  0.0263, 0.0, 0.0,
+                -1.80, -1.16,  1.30, -1.32, -1.47,  1.08,  2.3,
+                -1.80,  1.16, -1.30, -1.32,  1.47,  1.08, -2.3]

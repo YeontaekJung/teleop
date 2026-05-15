@@ -1,4 +1,0 @@
-string group_name
-sensor_msgs/JointState target_joint
----
-moveit_msgs/MotionPlanResponse motion_plan_response

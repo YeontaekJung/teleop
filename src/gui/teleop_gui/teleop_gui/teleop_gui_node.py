@@ -1,40 +1,50 @@
 """
-teleop_gui_node.py  (v2 — wide layout)
+teleop_gui_node.py  (v3 — service-based interface)
 
 Top:    RB-Y1 area  — connect, status, power/servo/pose controls
-Bottom: Teleop area — node status, pedal, teleop, recording, calibration
-
-Widget naming convention
-  _lbl_*   QLabel
-  _btn_*   QPushButton
-  _rb_*    QRadioButton
-  _bg_*    QButtonGroup
-  _le_*    QLineEdit
-  _chk_*   QCheckBox
-  _spin_*  QSpinBox
-  _pbar_*  QProgressBar
-  _timer_* QTimer
+Middle: Joint Position — preset dropdown, joint inputs, execute, save
+Bottom: Teleop area  — node status, pedal, teleop, recording, calibration
 """
 
 import json
+import os
 import sys
 import threading
 
 import rclpy
 from rclpy.node import Node
-from sensor_msgs.msg import Joy
+from sensor_msgs.msg import Joy, JointState
 from std_msgs.msg import Int32, String
 from std_srvs.srv import Trigger
+
+from rby1_core_msgs.srv import (
+    ConnectRobot, SetPower, SetServo, SetControlMode, MoveToJointPosition,
+)
+from scm_recording_msgs.srv import SetTeleOpPose
+
+try:
+    import yaml
+except ImportError:
+    yaml = None
 
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout,
     QGroupBox, QLabel, QPushButton, QProgressBar, QGridLayout,
-    QRadioButton, QButtonGroup, QSpinBox, QLineEdit, QCheckBox,
+    QRadioButton, QButtonGroup, QSpinBox, QDoubleSpinBox, QLineEdit,
+    QCheckBox, QComboBox, QInputDialog, QMessageBox, QScrollArea,
 )
 from PySide6.QtCore import Qt, QTimer, Signal, QObject
 from PySide6.QtGui import QFont
 
 CALIB_DURATION = 4.0  # seconds per phase — must match manus_inspire
+
+BODY_JOINT_NAMES = [
+    'torso_0', 'torso_1', 'torso_2', 'torso_3', 'torso_4', 'torso_5',
+    'right_arm_0', 'right_arm_1', 'right_arm_2', 'right_arm_3',
+    'right_arm_4', 'right_arm_5', 'right_arm_6',
+    'left_arm_0', 'left_arm_1', 'left_arm_2', 'left_arm_3',
+    'left_arm_4', 'left_arm_5', 'left_arm_6',
+]
 
 NODES_TO_WATCH = [
     ('pedal_node',           'pedal_ros2'),
@@ -57,6 +67,44 @@ _C_ON      = '#A6D256'
 _C_OFF     = 'lightgray'
 _C_OFF_RED = '#E53935'
 _C_FAULT   = '#ED325A'
+
+_USER_YAML = os.path.expanduser('~/.ros/teleop_gui_named_poses.yaml')
+
+
+def _load_named_poses():
+    """Load named_poses from user YAML, falling back to package default."""
+    if yaml is None:
+        return {}, 'ready'
+    # Try user file first
+    for path in [_USER_YAML]:
+        if os.path.exists(path):
+            try:
+                with open(path) as f:
+                    data = yaml.safe_load(f)
+                return data.get('named_poses', {}), data.get('teleop_pose', 'ready')
+            except Exception:
+                pass
+    # Fall back to package default
+    try:
+        pkg_yaml = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            'config', 'named_poses.yaml')
+        if os.path.exists(pkg_yaml):
+            with open(pkg_yaml) as f:
+                data = yaml.safe_load(f)
+            return data.get('named_poses', {}), data.get('teleop_pose', 'ready')
+    except Exception:
+        pass
+    return {}, 'ready'
+
+
+def _save_named_poses(named_poses: dict, teleop_pose: str):
+    if yaml is None:
+        return
+    os.makedirs(os.path.dirname(_USER_YAML), exist_ok=True)
+    with open(_USER_YAML, 'w') as f:
+        yaml.safe_dump({'teleop_pose': teleop_pose, 'named_poses': named_poses}, f,
+                       default_flow_style=False, allow_unicode=True)
 
 
 # ---------------------------------------------------------------------------
@@ -84,13 +132,27 @@ class TeleopGuiNode(Node):
         self.create_subscription(String, '/teleop/clutch_state',   self._cb_clutch_state,   10)
         self.create_timer(1.0, self._poll_nodes)
 
-        self._calib_client     = self.create_client(Trigger, '/manus_inspire/calibrate')
-        self._toggle_ep_client = self.create_client(Trigger, '/vive_rby1/toggle_episode')
+        # Service clients — rby1_rt
+        self._cli_connect      = self.create_client(ConnectRobot,        '/rby1/connect')
+        self._cli_power        = self.create_client(SetPower,            '/rby1/power')
+        self._cli_servo        = self.create_client(SetServo,            '/rby1/servo')
+        self._cli_ctrl_enable  = self.create_client(Trigger,             '/rby1/control_enable')
+        self._cli_err_reset    = self.create_client(Trigger,             '/rby1/error_reset')
+        self._cli_gripper_init = self.create_client(Trigger,             '/rby1/gripper_init')
+        self._cli_stop_move    = self.create_client(Trigger,             '/rby1/stop_move')
+        self._cli_ctrl_mode    = self.create_client(SetControlMode,      '/rby1/ctrl/mode')
+        self._cli_move_joint   = self.create_client(MoveToJointPosition, '/rby1/move_to_joint_position')
 
-        self._pub_task_id      = self.create_publisher(Int32,  '/teleop/task_id',      10)
-        self._pub_control_mode = self.create_publisher(String, '/teleop/control_mode', 10)
-        self._pub_rby1_cmd     = self.create_publisher(String, '/teleop/rby1_command', 10)
-        self._pub_mirror_mode  = self.create_publisher(String, '/teleop/mirror_mode',  10)
+        # Service clients — vive_rby1
+        self._cli_teleop_start  = self.create_client(Trigger,       '/vive_rby1/teleop_start')
+        self._cli_teleop_stop   = self.create_client(Trigger,       '/vive_rby1/teleop_stop')
+        self._cli_toggle_clutch = self.create_client(Trigger,       '/vive_rby1/toggle_clutch')
+        self._cli_set_pose      = self.create_client(SetTeleOpPose, '/vive_rby1/set_teleop_pose')
+        self._cli_toggle_ep     = self.create_client(Trigger,       '/vive_rby1/toggle_episode')
+        self._cli_calib         = self.create_client(Trigger,       '/manus_inspire/calibrate')
+
+        self._pub_task_id   = self.create_publisher(Int32,  '/teleop/task_id',    10)
+        self._pub_mirror    = self.create_publisher(String, '/teleop/mirror_mode', 10)
 
     # ── callbacks ──────────────────────────────────────────────────────────
 
@@ -133,33 +195,80 @@ class TeleopGuiNode(Node):
         for cb in self._node_status_cbs:
             cb(status)
 
-    # ── publishers / service calls ─────────────────────────────────────────
+    # ── publishers ─────────────────────────────────────────────────────────
 
     def pub_task_id(self, task_id: int):
         self._pub_task_id.publish(Int32(data=task_id))
 
-    def pub_control_mode(self, mode: str):
-        self._pub_control_mode.publish(String(data=mode))
-
-    def pub_rby1_cmd(self, command: str):
-        self._pub_rby1_cmd.publish(String(data=command))
-
     def pub_mirror_mode(self, mirror: bool):
-        self._pub_mirror_mode.publish(String(data='mirror' if mirror else 'normal'))
+        self._pub_mirror.publish(String(data='mirror' if mirror else 'normal'))
+
+    # ── generic async service helper ────────────────────────────────────────
+
+    def _call_async(self, client, request, done_cb=None):
+        def _run():
+            if not client.wait_for_service(timeout_sec=2.0):
+                if done_cb:
+                    done_cb(False, 'service not available')
+                return
+            fut = client.call_async(request)
+            rclpy.spin_until_future_complete(self, fut, timeout_sec=30.0)
+            if fut.done():
+                res = fut.result()
+                if done_cb:
+                    done_cb(getattr(res, 'success', True), getattr(res, 'message', ''))
+            else:
+                if done_cb:
+                    done_cb(False, 'timeout')
+        threading.Thread(target=_run, daemon=True).start()
+
+    # ── service call methods ────────────────────────────────────────────────
+
+    def call_connect(self, host: str, no_gripper: bool, done_cb=None):
+        req = ConnectRobot.Request()
+        req.host = host
+        req.no_gripper = no_gripper
+        self._call_async(self._cli_connect, req, done_cb)
+
+    def call_power(self, enable: bool, done_cb=None):
+        req = SetPower.Request()
+        req.enable = enable
+        self._call_async(self._cli_power, req, done_cb)
+
+    def call_servo(self, enable: bool, no_wheel: bool = False, done_cb=None):
+        req = SetServo.Request()
+        req.enable = enable
+        req.no_wheel = no_wheel
+        self._call_async(self._cli_servo, req, done_cb)
+
+    def call_trigger(self, client, done_cb=None):
+        self._call_async(client, Trigger.Request(), done_cb)
+
+    def call_ctrl_mode(self, source: str, control: str, done_cb=None):
+        req = SetControlMode.Request()
+        req.source = source
+        req.control = control
+        self._call_async(self._cli_ctrl_mode, req, done_cb)
+
+    def call_move_to_joint_position(self, positions: list, names: list,
+                                     min_time: float = 5.0, done_cb=None):
+        req = MoveToJointPosition.Request()
+        req.target.name = names
+        req.target.position = positions
+        req.min_time = min_time
+        self._call_async(self._cli_move_joint, req, done_cb)
+
+    def call_set_teleop_pose(self, positions: list, names: list, done_cb=None):
+        req = SetTeleOpPose.Request()
+        req.pose.name = names
+        req.pose.position = positions
+        self._call_async(self._cli_set_pose, req, done_cb)
 
     def call_calibrate(self, done_cb):
-        if not self._calib_client.wait_for_service(timeout_sec=1.0):
-            done_cb(False, 'Service not available')
-            return
-        fut = self._calib_client.call_async(Trigger.Request())
-        fut.add_done_callback(lambda f: done_cb(f.result().success, f.result().message))
+        self.call_trigger(self._cli_calib, done_cb)
 
     def call_toggle_episode(self, done_cb):
-        if not self._toggle_ep_client.wait_for_service(timeout_sec=1.0):
-            done_cb(False, 'Service not available')
-            return
-        fut = self._toggle_ep_client.call_async(Trigger.Request())
-        fut.add_done_callback(lambda f: done_cb(f.result().success, f.result().message))
+        self.call_trigger(self._cli_toggle_ep, done_cb)
 
 
 # ---------------------------------------------------------------------------
@@ -177,6 +286,7 @@ class Signals(QObject):
     tracker_status_changed = Signal(str, str)
     rby1_status_changed    = Signal(dict)
     clutch_state_changed   = Signal(str)
+    service_result         = Signal(bool, str)
 
 
 # ---------------------------------------------------------------------------
@@ -214,6 +324,9 @@ class TeleopGuiWindow(QWidget):
         self._rec_state = 'IDLE'
         self._stream_on = False
 
+        # Load named poses
+        self._named_poses, self._current_teleop_pose = _load_named_poses()
+
         signals.pedal_updated.connect(self._on_pedal)
         signals.node_status_updated.connect(self._on_nodes)
         signals.calib_status.connect(self._on_calib_status)
@@ -224,6 +337,7 @@ class TeleopGuiWindow(QWidget):
         signals.tracker_status_changed.connect(self._on_tracker_status)
         signals.rby1_status_changed.connect(self._on_rby1_status)
         signals.clutch_state_changed.connect(self._on_clutch_state)
+        signals.service_result.connect(self._on_service_result)
 
         self._build_ui()
 
@@ -231,11 +345,12 @@ class TeleopGuiWindow(QWidget):
 
     def _build_ui(self):
         self.setWindowTitle('Teleop Control')
-        self.setMinimumWidth(960)
+        self.setMinimumWidth(1100)
 
         root = QVBoxLayout()
         root.setSpacing(6)
         root.addWidget(self._build_rby1_group())
+        root.addWidget(self._build_joint_position_group())
         root.addWidget(self._build_teleop_group())
         self.setLayout(root)
 
@@ -248,13 +363,11 @@ class TeleopGuiWindow(QWidget):
         vbox.addLayout(self._build_status_row())
         vbox.addLayout(self._build_connect_row())
 
-        # Init + Pose rows on the left, STOP MOVE spanning both on the right
         bottom = QHBoxLayout()
         bottom.setSpacing(8)
         left = QVBoxLayout()
         left.setSpacing(4)
         left.addLayout(self._build_init_row())
-        left.addLayout(self._build_pose_row())
         bottom.addLayout(left, 1)
 
         btn_stop = QPushButton('⚠  STOP\nMOVE')
@@ -262,7 +375,8 @@ class TeleopGuiWindow(QWidget):
         btn_stop.setStyleSheet(
             'background-color: #FFD600; color: #000000;'
             'font-weight: bold; font-size: 13px;')
-        btn_stop.clicked.connect(lambda: self._node.pub_rby1_cmd('stop_move'))
+        btn_stop.clicked.connect(
+            lambda: self._node.call_trigger(self._node._cli_stop_move))
         bottom.addWidget(btn_stop)
 
         vbox.addLayout(bottom)
@@ -277,8 +391,9 @@ class TeleopGuiWindow(QWidget):
         self._lbl_control = _make_status_label('Control')
         self._lbl_stream  = _make_status_label('Stream')
         self._lbl_gripper = _make_status_label('Gripper')
+        self._lbl_ctr_type = _make_status_label('Mode')
         for lbl in (self._lbl_power, self._lbl_servo, self._lbl_control,
-                    self._lbl_stream, self._lbl_gripper):
+                    self._lbl_stream, self._lbl_gripper, self._lbl_ctr_type):
             row.addWidget(lbl)
         return row
 
@@ -296,7 +411,6 @@ class TeleopGuiWindow(QWidget):
 
         self._le_ip = QLineEdit('localhost:50051')
         self._le_ip.setFixedWidth(200)
-
         self._chk_no_gripper = QCheckBox('No Gripper')
         self._chk_no_gripper.setChecked(True)
 
@@ -315,37 +429,149 @@ class TeleopGuiWindow(QWidget):
     def _build_init_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
         row.setSpacing(5)
-        for label, cmd, color in [
-            ('Power On',     'power_on',      '#388E3C'),
-            ('Servo On',     'servo_on',      '#1976D2'),
-            ('Err Reset',    'error_reset',   '#F57C00'),
-            ('Ctrl Enable',  'control_enable','#7B1FA2'),
-            ('Gripper Init', 'gripper_init',  '#00838F'),
-        ]:
-            btn = _make_btn(label, color, height=30)
-            if cmd == 'teleop_start':
-                btn.clicked.connect(self._on_teleop_start)
-            else:
-                btn.clicked.connect(lambda _, c=cmd: self._node.pub_rby1_cmd(c))
-            row.addWidget(btn)
+
+        def _btn(label, color, fn):
+            b = _make_btn(label, color, height=30)
+            b.clicked.connect(fn)
+            row.addWidget(b)
+            return b
+
+        _btn('Power On',    '#388E3C', lambda: self._node.call_power(True))
+        _btn('Power Off',   '#C62828', lambda: self._node.call_power(False))
+        _btn('Servo On',    '#1976D2', lambda: self._node.call_servo(True))
+        _btn('Err Reset',   '#F57C00', lambda: self._node.call_trigger(self._node._cli_err_reset))
+        _btn('Ctrl Enable', '#7B1FA2', lambda: self._node.call_trigger(self._node._cli_ctrl_enable))
+        _btn('Gripper Init','#00838F', lambda: self._node.call_trigger(self._node._cli_gripper_init))
         row.addStretch()
         return row
 
-    def _build_pose_row(self) -> QHBoxLayout:
-        row = QHBoxLayout()
-        row.setSpacing(5)
-        for label, cmd, color in [
-            ('Power Off',  'power_off',  '#C62828'),
-            ('Zero Pose',  'zero_pose',  '#546E7A'),
-            ('Ready Pose', 'ready_pose', '#546E7A'),
-            ('VLA Pose',   'vla_pose',   '#546E7A'),
-            ('VLA2 Pose',  'vla_pose2',  '#546E7A'),
-        ]:
-            btn = _make_btn(label, color, height=30)
-            btn.clicked.connect(lambda _, c=cmd: self._node.pub_rby1_cmd(c))
-            row.addWidget(btn)
-        row.addStretch()
-        return row
+    # ── Joint Position group ───────────────────────────────────────────────
+
+    def _build_joint_position_group(self) -> QGroupBox:
+        group = QGroupBox('Joint Position')
+        main_row = QHBoxLayout()
+        main_row.setSpacing(10)
+
+        # Left: preset dropdown + joint fields
+        left_vbox = QVBoxLayout()
+        left_vbox.setSpacing(4)
+
+        preset_row = QHBoxLayout()
+        self._cmb_preset = QComboBox()
+        self._cmb_preset.setMinimumWidth(140)
+        for name in self._named_poses:
+            self._cmb_preset.addItem(name)
+        self._cmb_preset.currentTextChanged.connect(self._on_preset_selected)
+        self._btn_execute = _make_btn('Execute', '#2E7D32', height=30)
+        self._btn_execute.clicked.connect(self._on_execute_joint)
+        preset_row.addWidget(QLabel('Preset:'))
+        preset_row.addWidget(self._cmb_preset)
+        preset_row.addWidget(self._btn_execute)
+        preset_row.addStretch()
+        left_vbox.addLayout(preset_row)
+
+        # Joint input grid (20 joints, 2 columns of 10)
+        self._joint_spins = {}
+        joint_grid = QGridLayout()
+        joint_grid.setSpacing(3)
+        for idx, name in enumerate(BODY_JOINT_NAMES):
+            col_base = (idx // 10) * 2
+            row_pos  = idx % 10
+            lbl = QLabel(name)
+            lbl.setFont(QFont('Monospace', 8))
+            spin = QDoubleSpinBox()
+            spin.setDecimals(4)
+            spin.setRange(-6.28, 6.28)
+            spin.setSingleStep(0.01)
+            spin.setFixedWidth(90)
+            joint_grid.addWidget(lbl,  row_pos, col_base)
+            joint_grid.addWidget(spin, row_pos, col_base + 1)
+            self._joint_spins[name] = spin
+        left_vbox.addLayout(joint_grid)
+
+        # Save preset row
+        save_row = QHBoxLayout()
+        save_row.addWidget(QLabel('Save as:'))
+        self._le_preset_name = QLineEdit()
+        self._le_preset_name.setPlaceholderText('preset name')
+        self._le_preset_name.setFixedWidth(130)
+        self._btn_save_preset = _make_btn('Save', '#546E7A', height=28)
+        self._btn_save_preset.clicked.connect(self._on_save_preset)
+        save_row.addWidget(self._le_preset_name)
+        save_row.addWidget(self._btn_save_preset)
+        save_row.addStretch()
+        left_vbox.addLayout(save_row)
+        main_row.addLayout(left_vbox, 3)
+
+        # Right: Teleop Pose selector
+        right_vbox = QVBoxLayout()
+        right_vbox.setSpacing(6)
+        right_vbox.addWidget(QLabel('Teleop Start/Stop Pose:'))
+        self._cmb_teleop_pose = QComboBox()
+        self._cmb_teleop_pose.setMinimumWidth(140)
+        for name in self._named_poses:
+            self._cmb_teleop_pose.addItem(name)
+        if self._current_teleop_pose in self._named_poses:
+            self._cmb_teleop_pose.setCurrentText(self._current_teleop_pose)
+        self._cmb_teleop_pose.currentTextChanged.connect(self._on_teleop_pose_changed)
+        right_vbox.addWidget(self._cmb_teleop_pose)
+        right_vbox.addStretch()
+        main_row.addLayout(right_vbox, 1)
+
+        group.setLayout(main_row)
+
+        # Seed fields from current teleop_pose if available
+        if self._current_teleop_pose in self._named_poses:
+            self._fill_joint_fields(self._current_teleop_pose)
+
+        return group
+
+    def _fill_joint_fields(self, preset_name: str):
+        if preset_name not in self._named_poses:
+            return
+        pose = self._named_poses[preset_name]
+        names = pose.get('joint_names', [])
+        positions = pose.get('positions', [])
+        for name, val in zip(names, positions):
+            if name in self._joint_spins:
+                self._joint_spins[name].setValue(val)
+
+    def _on_preset_selected(self, name: str):
+        self._fill_joint_fields(name)
+
+    def _on_execute_joint(self):
+        positions = [self._joint_spins[n].value() for n in BODY_JOINT_NAMES]
+        self._btn_execute.setEnabled(False)
+        self._node.call_move_to_joint_position(
+            positions, BODY_JOINT_NAMES, min_time=5.0,
+            done_cb=lambda ok, msg: self._sig.service_result.emit(ok, msg))
+        QTimer.singleShot(1000, lambda: self._btn_execute.setEnabled(True))
+
+    def _on_save_preset(self):
+        name = self._le_preset_name.text().strip()
+        if not name:
+            return
+        positions = [self._joint_spins[n].value() for n in BODY_JOINT_NAMES]
+        self._named_poses[name] = {
+            'joint_names': list(BODY_JOINT_NAMES),
+            'positions': positions,
+        }
+        _save_named_poses(self._named_poses, self._cmb_teleop_pose.currentText())
+        # Update dropdowns
+        for cmb in (self._cmb_preset, self._cmb_teleop_pose):
+            if cmb.findText(name) < 0:
+                cmb.addItem(name)
+        self._cmb_preset.setCurrentText(name)
+        self._le_preset_name.clear()
+
+    def _on_teleop_pose_changed(self, name: str):
+        if name not in self._named_poses:
+            return
+        self._current_teleop_pose = name
+        _save_named_poses(self._named_poses, name)
+        pose = self._named_poses[name]
+        self._node.call_set_teleop_pose(
+            pose.get('positions', []), pose.get('joint_names', []))
 
     # ── Teleop group ───────────────────────────────────────────────────────
 
@@ -376,7 +602,6 @@ class TeleopGuiWindow(QWidget):
             grid.addWidget(QLabel(pkg), i, 1)
             self._node_dots[node] = dot
 
-        # Tracker status row
         n = len(NODES_TO_WATCH)
         self._lbl_tracker_l = QLabel('● L')
         self._lbl_tracker_r = QLabel('● R')
@@ -420,13 +645,14 @@ class TeleopGuiWindow(QWidget):
 
         teleop_row = QHBoxLayout()
         teleop_row.setSpacing(5)
-        for label, cmd, color in [
-            ('▶  Teleop Start', 'teleop_start', '#4CAF50'),
-            ('■  Teleop Stop',  'teleop_stop',  '#E53935'),
-        ]:
-            btn = _make_btn(label, color, height=34)
-            btn.clicked.connect(lambda _, c=cmd: self._node.pub_rby1_cmd(c))
-            teleop_row.addWidget(btn)
+        btn_ts = _make_btn('▶  Teleop Start', '#4CAF50', height=34)
+        btn_ts.clicked.connect(
+            lambda: self._node.call_trigger(self._node._cli_teleop_start))
+        btn_tp = _make_btn('■  Teleop Stop',  '#E53935', height=34)
+        btn_tp.clicked.connect(
+            lambda: self._node.call_trigger(self._node._cli_teleop_stop))
+        teleop_row.addWidget(btn_ts)
+        teleop_row.addWidget(btn_tp)
         vbox.addLayout(teleop_row)
 
         clutch_row = QHBoxLayout()
@@ -438,33 +664,18 @@ class TeleopGuiWindow(QWidget):
             'background-color: #E53935; color: white; border-radius: 4px; padding: 0 6px;')
         self._btn_clutch_toggle = _make_btn('⚙  Clutch Toggle', '#F57C00', height=28)
         self._btn_clutch_toggle.clicked.connect(
-            lambda: self._node.pub_rby1_cmd('clutch_toggle'))
+            lambda: self._node.call_trigger(self._node._cli_toggle_clutch))
         clutch_row.addWidget(self._lbl_clutch, 1)
         clutch_row.addWidget(self._btn_clutch_toggle, 2)
         vbox.addLayout(clutch_row)
 
         vbox.addSpacing(4)
 
-        ik_row = QHBoxLayout()
-        ik_row.addWidget(QLabel('IK:'))
-        self._rb_ik_sdk  = QRadioButton('Cartesian')
-        self._rb_ik_pink = QRadioButton('Joint')
-        self._rb_ik_sdk.setChecked(True)
-        self._bg_ik = QButtonGroup()
-        self._bg_ik.addButton(self._rb_ik_sdk,  0)
-        self._bg_ik.addButton(self._rb_ik_pink, 1)
-        self._bg_ik.idClicked.connect(self._on_ik_mode_changed)
-        ik_row.addWidget(self._rb_ik_sdk)
-        ik_row.addWidget(self._rb_ik_pink)
-        ik_row.addStretch()
-        vbox.addLayout(ik_row)
-
         ctrl_row = QHBoxLayout()
         ctrl_row.addWidget(QLabel('Ctrl:'))
         self._rb_ctrl_position  = QRadioButton('Position')
         self._rb_ctrl_impedance = QRadioButton('Impedance')
         self._rb_ctrl_impedance.setChecked(True)
-        self._rb_ctrl_position.setEnabled(False)
         self._bg_ctrl = QButtonGroup()
         self._bg_ctrl.addButton(self._rb_ctrl_position,  0)
         self._bg_ctrl.addButton(self._rb_ctrl_impedance, 1)
@@ -473,6 +684,20 @@ class TeleopGuiWindow(QWidget):
         ctrl_row.addWidget(self._rb_ctrl_impedance)
         ctrl_row.addStretch()
         vbox.addLayout(ctrl_row)
+
+        src_row = QHBoxLayout()
+        src_row.addWidget(QLabel('Src:'))
+        self._rb_src_joint     = QRadioButton('Joint')
+        self._rb_src_cartesian = QRadioButton('Cartesian')
+        self._rb_src_cartesian.setChecked(True)
+        self._bg_src = QButtonGroup()
+        self._bg_src.addButton(self._rb_src_joint,     0)
+        self._bg_src.addButton(self._rb_src_cartesian, 1)
+        self._bg_src.idClicked.connect(self._on_ctrl_mode_changed)
+        src_row.addWidget(self._rb_src_joint)
+        src_row.addWidget(self._rb_src_cartesian)
+        src_row.addStretch()
+        vbox.addLayout(src_row)
 
         mirror_row = QHBoxLayout()
         mirror_row.addWidget(QLabel('Tracking'))
@@ -507,8 +732,7 @@ class TeleopGuiWindow(QWidget):
         self._spin_task.setMinimum(0)
         self._spin_task.setMaximum(9999)
         self._spin_task.setFixedWidth(70)
-        self._spin_task.valueChanged.connect(
-            lambda v: self._node.pub_task_id(v))
+        self._spin_task.valueChanged.connect(lambda v: self._node.pub_task_id(v))
         task_row.addWidget(self._spin_task)
         task_row.addStretch()
 
@@ -555,10 +779,19 @@ class TeleopGuiWindow(QWidget):
             'localhost:50051' if btn_id == 0 else '192.168.30.1:50051')
 
     def _on_connect(self):
-        cmd = f'connect\n{self._le_ip.text().strip()}'
-        if self._chk_no_gripper.isChecked():
-            cmd += '\nno_gripper'
-        self._node.pub_rby1_cmd(cmd)
+        host = self._le_ip.text().strip()
+        no_gripper = self._chk_no_gripper.isChecked()
+        self._btn_connect.setEnabled(False)
+        self._node.call_connect(
+            host, no_gripper,
+            done_cb=lambda ok, msg: (
+                self._sig.service_result.emit(ok, f'connect: {msg}'),
+                QTimer.singleShot(500, lambda: self._btn_connect.setEnabled(True)),
+            ))
+
+    def _on_service_result(self, ok: bool, msg: str):
+        if not ok:
+            self._node.get_logger().warn(f'[GUI] service result: {msg}')
 
     def _on_rby1_status(self, data: dict):
         power   = data.get('power_state',   'False') == 'True'
@@ -566,15 +799,17 @@ class TeleopGuiWindow(QWidget):
         stream  = data.get('stream_state',  'False') == 'True'
         gripper = data.get('gripper_state', 'False') == 'True'
         ctrl    = data.get('control_state', '')
+        ctr_type = data.get('ctr_type', '')
 
         def _set(lbl, text, color):
             lbl.setText(f'  {text}  ')
             lbl.setStyleSheet(f'background-color: {color}; border-radius: 4px;')
 
-        _set(self._lbl_power,   'Power On'  if power   else 'Power Off',  _C_ON if power   else _C_OFF_RED)
-        _set(self._lbl_servo,   'Servo On'  if servo   else 'Servo Off',  _C_ON if servo   else _C_OFF_RED)
-        _set(self._lbl_stream,  'Stream On' if stream  else 'Stream Off', _C_ON if stream  else _C_OFF_RED)
-        _set(self._lbl_gripper, 'Gripper ✓' if gripper else 'Gripper ✗',  _C_ON if gripper else _C_OFF)
+        _set(self._lbl_power,    'Power On'  if power   else 'Power Off',  _C_ON if power   else _C_OFF_RED)
+        _set(self._lbl_servo,    'Servo On'  if servo   else 'Servo Off',  _C_ON if servo   else _C_OFF_RED)
+        _set(self._lbl_stream,   'Stream On' if stream  else 'Stream Off', _C_ON if stream  else _C_OFF_RED)
+        _set(self._lbl_gripper,  'Gripper ✓' if gripper else 'Gripper ✗',  _C_ON if gripper else _C_OFF)
+        _set(self._lbl_ctr_type, ctr_type or '—', _C_ON if stream else _C_OFF)
 
         if stream != self._stream_on:
             self._stream_on = stream
@@ -586,13 +821,10 @@ class TeleopGuiWindow(QWidget):
         else:
             _set(self._lbl_control, 'Idle', _C_OFF)
 
-
     def _on_pedal(self, state: list):
         for i, (btn, pressed) in enumerate(zip(self._btn_pedals, state)):
             color = '#A6D256' if pressed else '#ccc'
             btn.setStyleSheet(f'background-color: {color}; color: #333;')
-            if i == 0:
-                btn.setProperty('pressed', pressed)
 
     def _on_nodes(self, status: dict):
         for node, alive in status.items():
@@ -620,8 +852,8 @@ class TeleopGuiWindow(QWidget):
 
         is_idle = (state == 'IDLE')
         for w in (self._spin_task,
-                  self._rb_ik_sdk, self._rb_ik_pink,
                   self._rb_ctrl_position, self._rb_ctrl_impedance,
+                  self._rb_src_joint, self._rb_src_cartesian,
                   self._rb_track_normal, self._rb_track_mirror):
             w.setEnabled(is_idle)
 
@@ -645,31 +877,16 @@ class TeleopGuiWindow(QWidget):
     def _on_rec_episode(self, episode: int):
         self._lbl_episode.setText(str(episode) if episode >= 0 else '—')
 
-    def _on_ik_mode_changed(self, _btn_id: int):
-        self._pub_combined_mode()
-
     def _on_ctrl_mode_changed(self, _btn_id: int):
-        self._pub_combined_mode()
-
-    def _pub_combined_mode(self):
-        ik   = 'sdk'  if self._bg_ik.checkedId()   == 0 else 'pink'
-        ctrl = 'position' if self._bg_ctrl.checkedId() == 0 else 'impedance'
-        self._node.pub_control_mode(f'{ik}_{ctrl}')
-
-    def _sync_control_settings(self):
-        self._pub_combined_mode()
-        self._node.pub_mirror_mode(self._bg_track.checkedId() == 1)
-        self._node.pub_task_id(self._spin_task.value())
-
-    def _on_teleop_start(self):
-        self._sync_control_settings()
-        self._node.pub_rby1_cmd('teleop_start')
+        src  = 'joint'     if self._bg_src.checkedId()  == 0 else 'cartesian'
+        ctrl = 'position'  if self._bg_ctrl.checkedId() == 0 else 'impedance'
+        self._node.call_ctrl_mode(src, ctrl)
 
     def _on_mirror_mode_changed(self, btn_id: int):
         self._node.pub_mirror_mode(btn_id == 1)
 
     def _on_rec_btn(self):
-        self._sync_control_settings()
+        self._node.pub_task_id(self._spin_task.value())
         self._btn_rec.setEnabled(False)
         threading.Thread(
             target=self._node.call_toggle_episode,
@@ -757,7 +974,6 @@ def main(args=None):
     app    = QApplication(sys.argv)
     window = TeleopGuiWindow(ros_node, signals)
     window.show()
-    window._pub_combined_mode()  # vive_rby1_node에 초기 IK 모드 전송
 
     ret = app.exec()
     ros_node.destroy_node()

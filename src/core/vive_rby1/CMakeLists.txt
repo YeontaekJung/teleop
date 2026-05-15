@@ -9,7 +9,6 @@ find_package(ament_cmake REQUIRED)
 find_package(ament_index_cpp REQUIRED)
 find_package(ament_cmake_python REQUIRED)
 find_package(rclcpp REQUIRED)
-find_package(rclcpp_action REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
@@ -36,7 +35,6 @@ endif()
 ament_target_dependencies(vive_rby1_node
   ament_index_cpp
   rclcpp
-  rclcpp_action
   geometry_msgs
   sensor_msgs
   std_msgs

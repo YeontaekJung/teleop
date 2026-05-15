@@ -1,0 +1,4 @@
+sensor_msgs/JointState pose
+---
+bool success
+string message

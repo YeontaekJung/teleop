@@ -33,11 +33,12 @@
 #include "pinocchio/multibody/model.hpp"
 #include "pinocchio/parsers/urdf.hpp"
 #include "pinocchio/spatial/explog.hpp"
-#include "rby1_core_msgs/action/rby1_command.hpp"
 #include "ament_index_cpp/get_package_share_directory.hpp"
 #include "rclcpp/rclcpp.hpp"
-#include "rclcpp_action/rclcpp_action.hpp"
+#include "rby1_core_msgs/srv/move_to_joint_position.hpp"
+#include "rby1_core_msgs/srv/set_stream.hpp"
 #include "scm_recording_msgs/srv/end_recording.hpp"
+#include "scm_recording_msgs/srv/set_teleop_pose.hpp"
 #include "scm_recording_msgs/srv/start_recording.hpp"
 #include "scm_recording_msgs/srv/toggle_pause.hpp"
 #include "sensor_msgs/msg/joy.hpp"
@@ -236,12 +237,13 @@ class DifferentialIkSolver {
 
 class ViveRby1Node : public rclcpp::Node {
  public:
-  using Rby1Command = rby1_core_msgs::action::Rby1Command;
-  using GoalHandleRby1 = rclcpp_action::ClientGoalHandle<Rby1Command>;
   using StartRecording = scm_recording_msgs::srv::StartRecording;
   using EndRecording = scm_recording_msgs::srv::EndRecording;
   using TogglePause = scm_recording_msgs::srv::TogglePause;
   using SetControlMode = rby1_core_msgs::srv::SetControlMode;
+  using MoveToJointPosition = rby1_core_msgs::srv::MoveToJointPosition;
+  using SetStream = rby1_core_msgs::srv::SetStream;
+  using SetTeleOpPose = scm_recording_msgs::srv::SetTeleOpPose;
 
   ViveRby1Node()
   : Node("vive_rby1_node"),
@@ -299,14 +301,9 @@ class ViveRby1Node : public rclcpp::Node {
       "/teleop/task_id", 10, [this](const std_msgs::msg::Int32::SharedPtr msg) {
         rec_task_id_ = msg->data;
       });
-    sub_control_mode_ = create_subscription<std_msgs::msg::String>(
-      "/teleop/control_mode", 10, std::bind(&ViveRby1Node::onControlMode, this, std::placeholders::_1));
-    sub_rby1_command_ = create_subscription<std_msgs::msg::String>(
-      "/teleop/rby1_command", 10, std::bind(&ViveRby1Node::onRby1Command, this, std::placeholders::_1));
     sub_mirror_mode_ = create_subscription<std_msgs::msg::String>(
       "/teleop/mirror_mode", 10, std::bind(&ViveRby1Node::onMirrorMode, this, std::placeholders::_1));
 
-    pub_joint_cmd_ = create_publisher<sensor_msgs::msg::JointState>("/rby1/cmd/joint", 10);
     pub_pose_cmd_ = create_publisher<rby1_core_msgs::msg::LinkPoseCommand>("/rby1/cmd/pose", 10);
     // ── EE Pose → warmup hold ──────────────────────────────────────────
     sub_ee_pose_ = create_subscription<geometry_msgs::msg::PoseArray>(
@@ -322,8 +319,29 @@ class ViveRby1Node : public rclcpp::Node {
     cli_end_rec_ = create_client<EndRecording>("/scm_recording/end");
     cli_toggle_pause_ = create_client<TogglePause>("/scm_recording/toggle_pause");
     cli_set_mode_ = create_client<SetControlMode>("/rby1/ctrl/mode");
-    rby1_client_ = rclcpp_action::create_client<Rby1Command>(this, "/rby1/command");
+    cli_stream_ = create_client<SetStream>("/rby1/stream");
+    cli_move_joint_ = create_client<MoveToJointPosition>("/rby1/move_to_joint_position");
 
+    srv_teleop_start_ = create_service<std_srvs::srv::Trigger>(
+      "/vive_rby1/teleop_start",
+      [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+             std::shared_ptr<std_srvs::srv::Trigger::Response> res) {
+        on_teleop_start(res); });
+    srv_teleop_stop_ = create_service<std_srvs::srv::Trigger>(
+      "/vive_rby1/teleop_stop",
+      [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+             std::shared_ptr<std_srvs::srv::Trigger::Response> res) {
+        on_teleop_stop(res); });
+    srv_toggle_clutch_ = create_service<std_srvs::srv::Trigger>(
+      "/vive_rby1/toggle_clutch",
+      [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+             std::shared_ptr<std_srvs::srv::Trigger::Response> res) {
+        on_toggle_clutch(res); });
+    srv_set_teleop_pose_ = create_service<SetTeleOpPose>(
+      "/vive_rby1/set_teleop_pose",
+      [this](const std::shared_ptr<SetTeleOpPose::Request> req,
+             std::shared_ptr<SetTeleOpPose::Response> res) {
+        on_set_teleop_pose(req, res); });
     srv_toggle_episode_ = create_service<std_srvs::srv::Trigger>(
       "/vive_rby1/toggle_episode",
       [this](
@@ -384,37 +402,6 @@ class ViveRby1Node : public rclcpp::Node {
     ik_solver_->updateFromJointState(msg->name, msg->position);
   }
 
-  void onControlMode(const std_msgs::msg::String::SharedPtr msg) {
-    std::string mode = msg->data;
-    std::transform(
-      mode.begin(), mode.end(), mode.begin(),
-      [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-
-    if (mode.find("sdk") != std::string::npos && mode.find("imp") != std::string::npos) {
-      ik_mode_ = "sdk_impedance";
-    } else if (mode.find("sdk") != std::string::npos && mode.find("pos") != std::string::npos) {
-      ik_mode_ = "sdk_position";
-    } else if (mode.find("pink") != std::string::npos && mode.find("imp") != std::string::npos) {
-      ik_mode_ = "pink_impedance";
-    } else if (mode == "pink_position" || mode == "pink") {
-      ik_mode_ = "pink_position";
-    } else {
-      ik_mode_ = mode;
-    }
-    sdk_prev_l_.reset();
-    sdk_prev_r_.reset();
-    RCLCPP_INFO(
-      get_logger(), "[vive_rby1] IK mode -- raw=%s normalized=%s",
-      msg->data.c_str(), ik_mode_.c_str());
-
-    std::string src, ctrl;
-    if      (ik_mode_ == "pink_position")  { src = "joint";     ctrl = "position"; }
-    else if (ik_mode_ == "pink_impedance") { src = "joint";     ctrl = "impedance"; }
-    else if (ik_mode_ == "sdk_position")   { src = "cartesian"; ctrl = "position"; }
-    else if (ik_mode_ == "sdk_impedance")  { src = "cartesian"; ctrl = "impedance"; }
-    if (!src.empty()) { callSetControlMode(src, ctrl); }
-  }
-
   void onMirrorMode(const std_msgs::msg::String::SharedPtr msg) {
     mirror_mode_ = (msg->data == "mirror");
     RCLCPP_INFO(get_logger(), "[vive_rby1] mirror mode -- %s", mirror_mode_ ? "true" : "false");
@@ -424,23 +411,6 @@ class ViveRby1Node : public rclcpp::Node {
       ee_l_0_ = ik_solver_->framePlacement("tracker_left");
       ee_r_0_ = ik_solver_->framePlacement("tracker_right");
     }
-  }
-
-  void onRby1Command(const std_msgs::msg::String::SharedPtr msg) {
-    std::string cmd = msg->data;
-    if (cmd == "clutch_toggle") {
-      if (!teleop_active_) {
-        RCLCPP_WARN(get_logger(), "Cannot toggle clutch -- teleop not active");
-      } else if (engaged_) {
-        disengage();
-      } else if (tracker_l_.raw && tracker_r_.raw) {
-        engage();
-      } else {
-        RCLCPP_WARN(get_logger(), "Cannot engage -- Vive trackers not ready");
-      }
-      return;
-    }
-    sendRby1Command(cmd, "", nullptr);
   }
 
   void publishClutchState() {
@@ -546,8 +516,9 @@ class ViveRby1Node : public rclcpp::Node {
           rec_state_ = kRecIdle;
           rec_episode_ = -1;
           engaged_ = false;
-          RCLCPP_INFO(get_logger(), "[vive_rby1] Episode DISCARDED -- teleop_stop -- ready_pose");
-          sendRby1Command("teleop_stop", "ready_pose", nullptr);
+          RCLCPP_INFO(get_logger(), "[vive_rby1] Episode DISCARDED -- teleop_stop");
+          std::weak_ptr<ViveRby1Node> weak = std::static_pointer_cast<ViveRby1Node>(shared_from_this());
+          std::thread([weak]() { if (auto self = weak.lock()) self->doTeleopStop(); }).detach();
         } else {
           RCLCPP_ERROR(get_logger(), "discardEpisode failed: %s", result->message.c_str());
         }
@@ -571,8 +542,8 @@ class ViveRby1Node : public rclcpp::Node {
             rec_episode_ = result->episode_id;
             RCLCPP_INFO(
               get_logger(), "[vive_rby1] ARMING -- task %d ep %d", result->task_id, result->episode_id);
-            warmup_ticks_ = static_cast<int>(publish_rate_);
-            sendRby1Command("ready_pose", "teleop_start", nullptr);
+            std::weak_ptr<ViveRby1Node> weak = std::static_pointer_cast<ViveRby1Node>(shared_from_this());
+            std::thread([weak]() { if (auto self = weak.lock()) self->doTeleopStart(); }).detach();
           } else {
             RCLCPP_ERROR(get_logger(), "StartRecording failed: %s", result->message.c_str());
           }
@@ -593,8 +564,9 @@ class ViveRby1Node : public rclcpp::Node {
             rec_state_ = kRecIdle;
             rec_episode_ = -1;
             engaged_ = false;
-            RCLCPP_INFO(get_logger(), "[vive_rby1] Recording ENDED -- teleop_stop -- ready_pose");
-            sendRby1Command("teleop_stop", "ready_pose", nullptr);
+            RCLCPP_INFO(get_logger(), "[vive_rby1] Recording ENDED -- teleop_stop");
+            std::weak_ptr<ViveRby1Node> weak = std::static_pointer_cast<ViveRby1Node>(shared_from_this());
+            std::thread([weak]() { if (auto self = weak.lock()) self->doTeleopStop(); }).detach();
           } else {
             RCLCPP_ERROR(get_logger(), "EndRecording failed: %s", result->message.c_str());
           }
@@ -624,75 +596,127 @@ class ViveRby1Node : public rclcpp::Node {
       });
   }
 
-  void sendRby1Command(
-    const std::string & command, const std::string & then,
-    std::function<void()> on_complete) {
-    if (!rby1_client_->wait_for_action_server(0s)) {
-      RCLCPP_WARN(get_logger(), "rby1_command server not ready -- skipping \"%s\"", command.c_str());
-      if (on_complete) {
-        on_complete();
+  // ── New service handlers ──────────────────────────────────────────────────
+
+  void on_teleop_start(std::shared_ptr<std_srvs::srv::Trigger::Response> res) {
+    res->success = true;
+    res->message = "teleop start initiated";
+    std::weak_ptr<ViveRby1Node> weak = std::static_pointer_cast<ViveRby1Node>(shared_from_this());
+    std::thread([weak]() { if (auto self = weak.lock()) self->doTeleopStart(); }).detach();
+  }
+
+  void on_teleop_stop(std::shared_ptr<std_srvs::srv::Trigger::Response> res) {
+    res->success = true;
+    res->message = "teleop stop initiated";
+    std::weak_ptr<ViveRby1Node> weak = std::static_pointer_cast<ViveRby1Node>(shared_from_this());
+    std::thread([weak]() { if (auto self = weak.lock()) self->doTeleopStop(); }).detach();
+  }
+
+  void on_toggle_clutch(std::shared_ptr<std_srvs::srv::Trigger::Response> res) {
+    if (!teleop_active_) {
+      res->success = false; res->message = "teleop not active"; return;
+    }
+    if (engaged_) {
+      disengage();
+    } else if (tracker_l_.raw && tracker_r_.raw) {
+      engage();
+    } else {
+      res->success = false; res->message = "trackers not ready"; return;
+    }
+    res->success = true; res->message = "ok";
+  }
+
+  void on_set_teleop_pose(
+      const std::shared_ptr<SetTeleOpPose::Request> req,
+      std::shared_ptr<SetTeleOpPose::Response> res) {
+    teleop_pose_ = req->pose;
+    res->success = true;
+    res->message = "teleop pose updated";
+    RCLCPP_INFO(get_logger(), "[vive_rby1] teleop_pose updated (%zu joints)", req->pose.name.size());
+  }
+
+  // ── Teleop start/stop helpers (run in detached threads) ──────────────────
+
+  void doTeleopStart() {
+    using namespace std::chrono_literals;
+
+    // Step 1: Set cartesian impedance mode
+    auto r1 = std::make_shared<SetControlMode::Request>();
+    r1->source = "cartesian"; r1->control = "impedance";
+    auto f1 = cli_set_mode_->async_send_request(r1);
+    if (f1.wait_for(5s) != std::future_status::ready) {
+      RCLCPP_ERROR(get_logger(), "[vive_rby1] doTeleopStart: SetControlMode timeout");
+      return;
+    }
+    RCLCPP_INFO(get_logger(), "[vive_rby1] doTeleopStart: mode set to CartesianImpedance");
+
+    // Step 2: Move to teleop pose
+    auto r2 = std::make_shared<MoveToJointPosition::Request>();
+    r2->target = teleop_pose_;
+    r2->min_time = 5.0;
+    auto f2 = cli_move_joint_->async_send_request(r2);
+    if (f2.wait_for(30s) != std::future_status::ready) {
+      RCLCPP_ERROR(get_logger(), "[vive_rby1] doTeleopStart: MoveToJointPosition timeout");
+      return;
+    }
+    if (!f2.get()->success) {
+      RCLCPP_ERROR(get_logger(), "[vive_rby1] doTeleopStart: MoveToJointPosition failed");
+      if (rec_state_ == kRecArming) {
+        rec_state_ = kRecIdle; rec_episode_ = -1; publishRecState();
       }
       return;
     }
+    RCLCPP_INFO(get_logger(), "[vive_rby1] doTeleopStart: at teleop pose, starting stream");
 
-    if (command == "teleop_stop") {
-      teleop_active_ = false;
-      engaged_ = false;
-      publishClutchState();
+    // Step 3: Start stream
+    warmup_ticks_ = static_cast<int>(publish_rate_);
+    auto r3 = std::make_shared<SetStream::Request>();
+    r3->enable = true;
+    auto f3 = cli_stream_->async_send_request(r3);
+    if (f3.wait_for(10s) != std::future_status::ready || !f3.get()->success) {
+      RCLCPP_ERROR(get_logger(), "[vive_rby1] doTeleopStart: SetStream failed");
+      warmup_ticks_ = 0;
+      if (rec_state_ == kRecArming) {
+        rec_state_ = kRecIdle; rec_episode_ = -1; publishRecState();
+      }
+      return;
+    }
+    teleop_active_ = true;
+    sdk_prev_l_.reset(); sdk_prev_r_.reset();
+    if (rec_state_ == kRecArming) {
+      warmup_ticks_ = 0;
+      rec_state_ = kRecReady;
+      publishRecState();
+      RCLCPP_INFO(get_logger(), "[vive_rby1] Stream open -- READY");
+    }
+    RCLCPP_INFO(get_logger(), "[vive_rby1] doTeleopStart: complete");
+  }
+
+  void doTeleopStop() {
+    using namespace std::chrono_literals;
+    teleop_active_ = false;
+    engaged_ = false;
+    publishClutchState();
+
+    auto r1 = std::make_shared<SetStream::Request>();
+    r1->enable = false;
+    auto f1 = cli_stream_->async_send_request(r1);
+    if (f1.wait_for(5s) != std::future_status::ready) {
+      RCLCPP_ERROR(get_logger(), "[vive_rby1] doTeleopStop: SetStream(false) timeout");
     }
 
-    Rby1Command::Goal goal_msg;
-    goal_msg.command = command;
-    RCLCPP_INFO(get_logger(), "[vive_rby1] sending rby1_command: %s", command.c_str());
-
-    rclcpp_action::Client<Rby1Command>::SendGoalOptions opts;
-    opts.goal_response_callback =
-      [this, command, then, on_complete](const GoalHandleRby1::SharedPtr & goal_handle) {
-        if (!goal_handle) {
-          RCLCPP_WARN(get_logger(), "rby1_command \"%s\" rejected", command.c_str());
-          if (on_complete) {
-            on_complete();
-          }
-        }
-      };
-    opts.result_callback =
-      [this, command, then, on_complete](const GoalHandleRby1::WrappedResult & result) {
-        const bool succeeded = result.code == rclcpp_action::ResultCode::SUCCEEDED;
-        if (command == "teleop_start")
-        {
-          teleop_active_ = succeeded;
-          if (succeeded && rec_state_ == kRecArming) {
-            warmup_ticks_ = 0;
-            rec_state_ = kRecReady;
-            publishRecState();
-            RCLCPP_INFO(get_logger(), "[vive_rby1] Stream open -- READY");
-          }
-          if (!succeeded) {
-            RCLCPP_ERROR(
-              get_logger(), "rby1_command \"%s\" failed -- stream may have expired",
-              command.c_str());
-            if (rec_state_ == kRecArming) {
-              rec_state_ = kRecIdle;
-              rec_episode_ = -1;
-              publishRecState();
-            }
-          }
-        }
-        if (on_complete) {
-          on_complete();
-        }
-        if (!then.empty() && succeeded) {
-          std::weak_ptr<ViveRby1Node> weak = std::static_pointer_cast<ViveRby1Node>(shared_from_this());
-          std::thread([weak, then]() {
-            std::this_thread::sleep_for(1s);
-            if (auto self = weak.lock()) {
-              self->sendRby1Command(then, "", nullptr);
-            }
-          }).detach();
-        }
-      };
-
-    rby1_client_->async_send_goal(goal_msg, opts);
+    auto r2 = std::make_shared<MoveToJointPosition::Request>();
+    r2->target = teleop_pose_;
+    r2->min_time = 5.0;
+    auto f2 = cli_move_joint_->async_send_request(r2);
+    if (f2.wait_for(30s) != std::future_status::ready) {
+      RCLCPP_ERROR(get_logger(), "[vive_rby1] doTeleopStop: MoveToJointPosition timeout");
+      return;
+    }
+    if (!f2.get()->success) {
+      RCLCPP_ERROR(get_logger(), "[vive_rby1] doTeleopStop: MoveToJointPosition failed");
+    }
+    RCLCPP_INFO(get_logger(), "[vive_rby1] doTeleopStop: complete");
   }
 
   void publishRecState() {
@@ -803,10 +827,7 @@ class ViveRby1Node : public rclcpp::Node {
 
     if (warmup_ticks_ > 0) {
       --warmup_ticks_;
-      if (ik_mode_.rfind("sdk_", 0) != 0) {
-        publishQ20(ik_solver_->currentQ20());
-      } else if (last_ee_pose_ && last_ee_pose_->poses.size() >= 2) {
-        // Hold current EE pose during SDK mode warmup (FK from rby1_rt)
+      if (last_ee_pose_ && last_ee_pose_->poses.size() >= 2) {
         rby1_core_msgs::msg::LinkPoseCommand hold;
         hold.link_names = {"ee_right", "ee_left"};
         hold.poses.push_back(last_ee_pose_->poses[0]);
@@ -856,76 +877,41 @@ class ViveRby1Node : public rclcpp::Node {
     const pinocchio::SE3 left_target(dR_l_robot * ee_l_0_->rotation(), target_pos_l);
     const pinocchio::SE3 right_target(dR_r_robot * ee_r_0_->rotation(), target_pos_r);
 
-    if (ik_mode_.rfind("sdk_", 0) == 0) {
-      // SDK mode: rby1_rt targets ee_right/ee_left, not tracker frame.
-      // tracker_right is offset from ee_right by [0.05, 0, -0.1] (URDF).
-      // Re-anchor the already-correct delta onto the ee frame reference.
-      const pinocchio::SE3 sdk_right_target(
-        dR_r_robot * sdk_ee_r_0_->rotation(),
-        sdk_ee_r_0_->translation() + (target_pos_r - ee_r_0_->translation()));
-      const pinocchio::SE3 sdk_left_target(
-        dR_l_robot * sdk_ee_l_0_->rotation(),
-        sdk_ee_l_0_->translation() + (target_pos_l - ee_l_0_->translation()));
-      const auto sdk_l = limitSdkTarget(sdk_prev_l_, sdk_left_target, "left");
-      const auto sdk_r = limitSdkTarget(sdk_prev_r_, sdk_right_target, "right");
-      if (!sdk_l || !sdk_r) {
-        return;
-      }
-      sdk_prev_l_ = sdk_l;
-      sdk_prev_r_ = sdk_r;
-
-      rby1_core_msgs::msg::LinkPoseCommand msg;
-      msg.link_names = {"ee_right", "ee_left"};
-      msg.poses.push_back(se3ToPose(*sdk_r));
-      msg.poses.push_back(se3ToPose(*sdk_l));
-      if (ref_body_ && torso5_0_ && tracker_b_.smoothed) {
-        Eigen::Vector3d delta_b = v2r_R_ * (tracker_b_.smoothed->translation() - ref_body_->translation());
-        const Eigen::Matrix3d dR_b = tracker_b_.smoothed->rotation() * ref_body_->rotation().transpose();
-        Eigen::Matrix3d dR_b_robot = v2r_R_ * dR_b * v2r_R_.transpose();
-        if (mirror_mode_) {
-          const Eigen::Matrix3d mf = (Eigen::Vector3d(1., -1., 1.)).asDiagonal();
-          delta_b = mf * delta_b;
-          dR_b_robot = mf * dR_b_robot * mf;
-        }
-        const pinocchio::SE3 torso_target(dR_b_robot * torso5_0_->rotation(),
-                                          torso5_0_->translation() + torso_pos_scale_ * delta_b);
-        msg.link_names.push_back("link_torso_5");
-        msg.poses.push_back(se3ToPose(torso_target));
-      }
-      pub_pose_cmd_->publish(msg);
+    // CartesianImpedance: rby1_rt targets ee_right/ee_left (not tracker frame).
+    // Re-anchor the delta from the tracker frame onto the ee frame reference.
+    const pinocchio::SE3 sdk_right_target(
+      dR_r_robot * sdk_ee_r_0_->rotation(),
+      sdk_ee_r_0_->translation() + (target_pos_r - ee_r_0_->translation()));
+    const pinocchio::SE3 sdk_left_target(
+      dR_l_robot * sdk_ee_l_0_->rotation(),
+      sdk_ee_l_0_->translation() + (target_pos_l - ee_l_0_->translation()));
+    const auto sdk_l = limitSdkTarget(sdk_prev_l_, sdk_left_target, "left");
+    const auto sdk_r = limitSdkTarget(sdk_prev_r_, sdk_right_target, "right");
+    if (!sdk_l || !sdk_r) {
       return;
     }
+    sdk_prev_l_ = sdk_l;
+    sdk_prev_r_ = sdk_r;
 
-    publishQ20(ik_solver_->solveToQ20(left_target, right_target, ik_dt_));
-  }
-
-  void publishQ20(const Eigen::VectorXd & q20) {
-    sensor_msgs::msg::JointState cmd;
-    cmd.header.stamp = now();
-    cmd.name = bodyJointNames();
-    cmd.position.reserve(q20.size());
-    for (Eigen::Index i = 0; i < q20.size(); ++i) {
-      cmd.position.push_back(q20[i]);
+    rby1_core_msgs::msg::LinkPoseCommand msg;
+    msg.link_names = {"ee_right", "ee_left"};
+    msg.poses.push_back(se3ToPose(*sdk_r));
+    msg.poses.push_back(se3ToPose(*sdk_l));
+    if (ref_body_ && torso5_0_ && tracker_b_.smoothed) {
+      Eigen::Vector3d delta_b = v2r_R_ * (tracker_b_.smoothed->translation() - ref_body_->translation());
+      const Eigen::Matrix3d dR_b = tracker_b_.smoothed->rotation() * ref_body_->rotation().transpose();
+      Eigen::Matrix3d dR_b_robot = v2r_R_ * dR_b * v2r_R_.transpose();
+      if (mirror_mode_) {
+        const Eigen::Matrix3d mf = (Eigen::Vector3d(1., -1., 1.)).asDiagonal();
+        delta_b = mf * delta_b;
+        dR_b_robot = mf * dR_b_robot * mf;
+      }
+      const pinocchio::SE3 torso_target(dR_b_robot * torso5_0_->rotation(),
+                                        torso5_0_->translation() + torso_pos_scale_ * delta_b);
+      msg.link_names.push_back("link_torso_5");
+      msg.poses.push_back(se3ToPose(torso_target));
     }
-    pub_joint_cmd_->publish(cmd);
-  }
-
-  void callSetControlMode(const std::string & source, const std::string & control) {
-    if (!cli_set_mode_->wait_for_service(0s)) {
-      RCLCPP_WARN(get_logger(), "[vive_rby1] SetControlMode service not ready");
-      return;
-    }
-    auto req = std::make_shared<SetControlMode::Request>();
-    req->source = source;
-    req->control = control;
-    cli_set_mode_->async_send_request(
-      req, [this](rclcpp::Client<SetControlMode>::SharedFuture f) {
-        try {
-          RCLCPP_INFO(get_logger(), "[vive_rby1] SetControlMode: %s", f.get()->message.c_str());
-        } catch (const std::exception & e) {
-          RCLCPP_ERROR(get_logger(), "[vive_rby1] SetControlMode error: %s", e.what());
-        }
-      });
+    pub_pose_cmd_->publish(msg);
   }
 
   double nowSec() const {
@@ -941,12 +927,9 @@ class ViveRby1Node : public rclcpp::Node {
   rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr sub_pedal_;
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr sub_joint_state_;
   rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr sub_task_id_;
-  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr sub_control_mode_;
-  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr sub_rby1_command_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr sub_mirror_mode_;
-  rclcpp::Subscription<geometry_msgs::msg::PoseArray>::SharedPtr sub_ee_pose_;  // EE Pose Publisher → warmup hold
+  rclcpp::Subscription<geometry_msgs::msg::PoseArray>::SharedPtr sub_ee_pose_;
 
-  rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr pub_joint_cmd_;
   rclcpp::Publisher<rby1_core_msgs::msg::LinkPoseCommand>::SharedPtr pub_pose_cmd_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_rec_state_;
   rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr pub_rec_episode_;
@@ -957,7 +940,12 @@ class ViveRby1Node : public rclcpp::Node {
   rclcpp::Client<EndRecording>::SharedPtr cli_end_rec_;
   rclcpp::Client<TogglePause>::SharedPtr cli_toggle_pause_;
   rclcpp::Client<SetControlMode>::SharedPtr cli_set_mode_;
-  rclcpp_action::Client<Rby1Command>::SharedPtr rby1_client_;
+  rclcpp::Client<SetStream>::SharedPtr cli_stream_;
+  rclcpp::Client<MoveToJointPosition>::SharedPtr cli_move_joint_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_teleop_start_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_teleop_stop_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_toggle_clutch_;
+  rclcpp::Service<SetTeleOpPose>::SharedPtr srv_set_teleop_pose_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_toggle_episode_;
   rclcpp::TimerBase::SharedPtr timer_;
 
@@ -981,9 +969,20 @@ class ViveRby1Node : public rclcpp::Node {
   std::string rec_state_{kRecIdle};
   int rec_episode_{-1};
   int rec_task_id_{0};
-  std::optional<geometry_msgs::msg::PoseArray> last_ee_pose_;  // EE Pose Publisher → warmup hold
+  std::optional<geometry_msgs::msg::PoseArray> last_ee_pose_;
 
-  std::string ik_mode_{"pink_position"};
+  // Default teleop pose (ready pose; overridden via /vive_rby1/set_teleop_pose)
+  sensor_msgs::msg::JointState teleop_pose_ = []() {
+    sensor_msgs::msg::JointState js;
+    js.name = {"torso_0","torso_1","torso_2","torso_3","torso_4","torso_5",
+               "right_arm_0","right_arm_1","right_arm_2","right_arm_3","right_arm_4","right_arm_5","right_arm_6",
+               "left_arm_0","left_arm_1","left_arm_2","left_arm_3","left_arm_4","left_arm_5","left_arm_6"};
+    constexpr double d2r = 3.14159265358979323846 / 180.0;
+    js.position = {0, 30*d2r, -60*d2r, 30*d2r, 0, 0,
+                   -8.68*d2r, -9.86*d2r,  1.89*d2r, -103.95*d2r,  0.37*d2r, 22.07*d2r, -10.35*d2r,
+                   -8.68*d2r,  9.86*d2r, -1.89*d2r, -103.95*d2r, -0.37*d2r, 22.07*d2r,  10.35*d2r};
+    return js;
+  }();
   bool mirror_mode_{false};
   int warmup_ticks_{0};
   bool teleop_active_{false};

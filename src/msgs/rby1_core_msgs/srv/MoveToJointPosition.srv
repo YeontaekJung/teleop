@@ -1,0 +1,5 @@
+sensor_msgs/JointState target
+float64 min_time
+---
+bool success
+string message

@@ -1,0 +1,5 @@
+string host
+bool no_gripper
+---
+bool success
+string message
