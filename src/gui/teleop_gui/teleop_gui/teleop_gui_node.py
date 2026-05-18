@@ -10,6 +10,7 @@ import json
 import os
 import sys
 import threading
+import time
 
 import rclpy
 from rclpy.node import Node
@@ -68,41 +69,37 @@ _C_OFF     = 'lightgray'
 _C_OFF_RED = '#E53935'
 _C_FAULT   = '#ED325A'
 
-_USER_YAML = os.path.expanduser('~/.ros/teleop_gui_named_poses.yaml')
+def _get_config_yaml():
+    try:
+        from ament_index_python.packages import get_package_share_directory
+        return os.path.join(
+            get_package_share_directory('teleop_gui'), 'config', 'named_poses.yaml')
+    except Exception:
+        pass
+    return os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        'config', 'named_poses.yaml')
+
+_CONFIG_YAML = _get_config_yaml()
 
 
 def _load_named_poses():
-    """Load named_poses from user YAML, falling back to package default."""
     if yaml is None:
         return {}, 'ready'
-    # Try user file first
-    for path in [_USER_YAML]:
-        if os.path.exists(path):
-            try:
-                with open(path) as f:
-                    data = yaml.safe_load(f)
-                return data.get('named_poses', {}), data.get('teleop_pose', 'ready')
-            except Exception:
-                pass
-    # Fall back to package default
-    try:
-        pkg_yaml = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            'config', 'named_poses.yaml')
-        if os.path.exists(pkg_yaml):
-            with open(pkg_yaml) as f:
+    if os.path.exists(_CONFIG_YAML):
+        try:
+            with open(_CONFIG_YAML) as f:
                 data = yaml.safe_load(f)
             return data.get('named_poses', {}), data.get('teleop_pose', 'ready')
-    except Exception:
-        pass
+        except Exception:
+            pass
     return {}, 'ready'
 
 
 def _save_named_poses(named_poses: dict, teleop_pose: str):
     if yaml is None:
         return
-    os.makedirs(os.path.dirname(_USER_YAML), exist_ok=True)
-    with open(_USER_YAML, 'w') as f:
+    with open(_CONFIG_YAML, 'w') as f:
         yaml.safe_dump({'teleop_pose': teleop_pose, 'named_poses': named_poses}, f,
                        default_flow_style=False, allow_unicode=True)
 
@@ -205,21 +202,27 @@ class TeleopGuiNode(Node):
 
     # ── generic async service helper ────────────────────────────────────────
 
-    def _call_async(self, client, request, done_cb=None):
+    def _call_async(self, client, request, done_cb=None, timeout_sec=30.0):
         def _run():
             if not client.wait_for_service(timeout_sec=2.0):
                 if done_cb:
                     done_cb(False, 'service not available')
                 return
             fut = client.call_async(request)
-            rclpy.spin_until_future_complete(self, fut, timeout_sec=30.0)
-            if fut.done():
+            deadline = time.monotonic() + timeout_sec
+            while not fut.done():
+                if time.monotonic() > deadline:
+                    if done_cb:
+                        done_cb(False, 'timeout')
+                    return
+                time.sleep(0.02)
+            try:
                 res = fut.result()
                 if done_cb:
                     done_cb(getattr(res, 'success', True), getattr(res, 'message', ''))
-            else:
+            except Exception as e:
                 if done_cb:
-                    done_cb(False, 'timeout')
+                    done_cb(False, str(e))
         threading.Thread(target=_run, daemon=True).start()
 
     # ── service call methods ────────────────────────────────────────────────
@@ -228,7 +231,7 @@ class TeleopGuiNode(Node):
         req = ConnectRobot.Request()
         req.host = host
         req.no_gripper = no_gripper
-        self._call_async(self._cli_connect, req, done_cb)
+        self._call_async(self._cli_connect, req, done_cb, timeout_sec=15.0)
 
     def call_power(self, enable: bool, done_cb=None):
         req = SetPower.Request()
@@ -287,6 +290,8 @@ class Signals(QObject):
     rby1_status_changed    = Signal(dict)
     clutch_state_changed   = Signal(str)
     service_result         = Signal(bool, str)
+    connect_result         = Signal(bool, str)
+    execute_done           = Signal(bool, str)
 
 
 # ---------------------------------------------------------------------------
@@ -338,6 +343,7 @@ class TeleopGuiWindow(QWidget):
         signals.rby1_status_changed.connect(self._on_rby1_status)
         signals.clutch_state_changed.connect(self._on_clutch_state)
         signals.service_result.connect(self._on_service_result)
+        signals.connect_result.connect(self._on_connect_result)
 
         self._build_ui()
 
@@ -418,11 +424,16 @@ class TeleopGuiWindow(QWidget):
         self._btn_connect.setFixedWidth(90)
         self._btn_connect.clicked.connect(self._on_connect)
 
+        self._lbl_conn_status = QLabel('')
+        self._lbl_conn_status.setFont(QFont('Monospace', 9))
+        self._lbl_conn_status.setFixedHeight(26)
+
         row.addWidget(self._rb_sim)
         row.addWidget(self._rb_real)
         row.addWidget(self._le_ip)
         row.addWidget(self._chk_no_gripper)
         row.addWidget(self._btn_connect)
+        row.addWidget(self._lbl_conn_status)
         row.addStretch()
         return row
 
@@ -464,6 +475,9 @@ class TeleopGuiWindow(QWidget):
         self._cmb_preset.currentTextChanged.connect(self._on_preset_selected)
         self._btn_execute = _make_btn('Execute', '#2E7D32', height=30)
         self._btn_execute.clicked.connect(self._on_execute_joint)
+        self._sig.execute_done.connect(
+            lambda ok, msg: (self._btn_execute.setEnabled(True),
+                             self._sig.service_result.emit(ok, msg)))
         preset_row.addWidget(QLabel('Preset:'))
         preset_row.addWidget(self._cmb_preset)
         preset_row.addWidget(self._btn_execute)
@@ -472,6 +486,7 @@ class TeleopGuiWindow(QWidget):
 
         # Joint input grid (20 joints, 2 columns of 10)
         self._joint_spins = {}
+        self._filling_preset = False
         joint_grid = QGridLayout()
         joint_grid.setSpacing(3)
         for idx, name in enumerate(BODY_JOINT_NAMES):
@@ -484,6 +499,7 @@ class TeleopGuiWindow(QWidget):
             spin.setRange(-6.28, 6.28)
             spin.setSingleStep(0.01)
             spin.setFixedWidth(90)
+            spin.valueChanged.connect(self._on_joint_spin_changed)
             joint_grid.addWidget(lbl,  row_pos, col_base)
             joint_grid.addWidget(spin, row_pos, col_base + 1)
             self._joint_spins[name] = spin
@@ -518,12 +534,11 @@ class TeleopGuiWindow(QWidget):
         right_vbox.addStretch()
         main_row.addLayout(right_vbox, 1)
 
+        if 'zero' in self._named_poses:
+            self._cmb_preset.setCurrentText('zero')
+            self._fill_joint_fields('zero')
+
         group.setLayout(main_row)
-
-        # Seed fields from current teleop_pose if available
-        if self._current_teleop_pose in self._named_poses:
-            self._fill_joint_fields(self._current_teleop_pose)
-
         return group
 
     def _fill_joint_fields(self, preset_name: str):
@@ -532,9 +547,17 @@ class TeleopGuiWindow(QWidget):
         pose = self._named_poses[preset_name]
         names = pose.get('joint_names', [])
         positions = pose.get('positions', [])
-        for name, val in zip(names, positions):
-            if name in self._joint_spins:
-                self._joint_spins[name].setValue(val)
+        self._filling_preset = True
+        try:
+            for name, val in zip(names, positions):
+                if name in self._joint_spins:
+                    self._joint_spins[name].setValue(val)
+        finally:
+            self._filling_preset = False
+
+    def _on_joint_spin_changed(self):
+        if not self._filling_preset:
+            self._cmb_preset.setCurrentIndex(-1)
 
     def _on_preset_selected(self, name: str):
         self._fill_joint_fields(name)
@@ -543,9 +566,8 @@ class TeleopGuiWindow(QWidget):
         positions = [self._joint_spins[n].value() for n in BODY_JOINT_NAMES]
         self._btn_execute.setEnabled(False)
         self._node.call_move_to_joint_position(
-            positions, BODY_JOINT_NAMES, min_time=5.0,
-            done_cb=lambda ok, msg: self._sig.service_result.emit(ok, msg))
-        QTimer.singleShot(1000, lambda: self._btn_execute.setEnabled(True))
+            positions, BODY_JOINT_NAMES, min_time=0.0,
+            done_cb=lambda ok, msg: self._sig.execute_done.emit(ok, msg))
 
     def _on_save_preset(self):
         name = self._le_preset_name.text().strip()
@@ -782,16 +804,27 @@ class TeleopGuiWindow(QWidget):
         host = self._le_ip.text().strip()
         no_gripper = self._chk_no_gripper.isChecked()
         self._btn_connect.setEnabled(False)
-        self._node.call_connect(
-            host, no_gripper,
-            done_cb=lambda ok, msg: (
-                self._sig.service_result.emit(ok, f'connect: {msg}'),
-                QTimer.singleShot(500, lambda: self._btn_connect.setEnabled(True)),
-            ))
+        self._lbl_conn_status.setText('Connecting...')
+        self._lbl_conn_status.setStyleSheet('color: #888;')
+
+        def _done(ok, msg):
+            self._sig.service_result.emit(ok, f'connect: {msg}')
+            self._sig.connect_result.emit(ok, msg)
+            QTimer.singleShot(0, lambda: self._btn_connect.setEnabled(True))
+
+        self._node.call_connect(host, no_gripper, done_cb=_done)
 
     def _on_service_result(self, ok: bool, msg: str):
         if not ok:
             self._node.get_logger().warn(f'[GUI] service result: {msg}')
+
+    def _on_connect_result(self, ok: bool, msg: str):
+        if ok:
+            self._lbl_conn_status.setText('Connected')
+            self._lbl_conn_status.setStyleSheet('color: #A6D256; font-weight: bold;')
+        else:
+            self._lbl_conn_status.setText(f'Failed: {msg}')
+            self._lbl_conn_status.setStyleSheet('color: #E53935; font-weight: bold;')
 
     def _on_rby1_status(self, data: dict):
         power   = data.get('power_state',   'False') == 'True'

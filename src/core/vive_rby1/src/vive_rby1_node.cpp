@@ -38,7 +38,7 @@
 #include "rby1_core_msgs/srv/move_to_joint_position.hpp"
 #include "rby1_core_msgs/srv/set_stream.hpp"
 #include "scm_recording_msgs/srv/end_recording.hpp"
-#include "scm_recording_msgs/srv/set_teleop_pose.hpp"
+#include "scm_recording_msgs/srv/set_tele_op_pose.hpp"
 #include "scm_recording_msgs/srv/start_recording.hpp"
 #include "scm_recording_msgs/srv/toggle_pause.hpp"
 #include "sensor_msgs/msg/joy.hpp"
