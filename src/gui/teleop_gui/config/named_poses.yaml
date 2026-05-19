@@ -128,4 +128,5 @@ named_poses:
     - 0.0
     - 0.0
     - 0.0
+robot_model: m
 teleop_pose: ready

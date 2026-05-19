@@ -21,6 +21,8 @@ from std_srvs.srv import Trigger
 from rby1_core_msgs.srv import (
     ConnectRobot, SetPower, SetServo, SetControlMode, MoveToJointPosition,
 )
+from rcl_interfaces.srv import SetParameters
+from rcl_interfaces.msg import Parameter as RosParameter, ParameterValue, ParameterType
 from scm_recording_msgs.srv import SetTeleOpPose
 
 try:
@@ -85,23 +87,28 @@ _CONFIG_YAML = _get_config_yaml()
 
 def _load_named_poses():
     if yaml is None:
-        return {}, 'ready'
+        return {}, 'ready', 'a'
     if os.path.exists(_CONFIG_YAML):
         try:
             with open(_CONFIG_YAML) as f:
                 data = yaml.safe_load(f)
-            return data.get('named_poses', {}), data.get('teleop_pose', 'ready')
+            return (data.get('named_poses', {}),
+                    data.get('teleop_pose', 'ready'),
+                    data.get('robot_model', 'a'))
         except Exception:
             pass
-    return {}, 'ready'
+    return {}, 'ready', 'a'
 
 
-def _save_named_poses(named_poses: dict, teleop_pose: str):
+def _save_named_poses(named_poses: dict, teleop_pose: str, robot_model: str = 'a'):
     if yaml is None:
         return
     with open(_CONFIG_YAML, 'w') as f:
-        yaml.safe_dump({'teleop_pose': teleop_pose, 'named_poses': named_poses}, f,
-                       default_flow_style=False, allow_unicode=True)
+        yaml.safe_dump({
+            'teleop_pose': teleop_pose,
+            'named_poses': named_poses,
+            'robot_model': robot_model,
+        }, f, default_flow_style=False, allow_unicode=True)
 
 
 # ---------------------------------------------------------------------------
@@ -139,6 +146,7 @@ class TeleopGuiNode(Node):
         self._cli_stop_move    = self.create_client(Trigger,             '/rby1/stop_move')
         self._cli_ctrl_mode    = self.create_client(SetControlMode,      '/rby1/ctrl/mode')
         self._cli_move_joint   = self.create_client(MoveToJointPosition, '/rby1/move_to_joint_position')
+        self._cli_set_param    = self.create_client(SetParameters,        '/rby1_rt_node/set_parameters')
 
         # Service clients — vive_rby1
         self._cli_teleop_start  = self.create_client(Trigger,       '/vive_rby1/teleop_start')
@@ -226,6 +234,40 @@ class TeleopGuiNode(Node):
         threading.Thread(target=_run, daemon=True).start()
 
     # ── service call methods ────────────────────────────────────────────────
+
+    def set_robot_model(self, model: str, done_cb=None):
+        """Set robot_model parameter on rby1_rt_node (must be called before connect)."""
+        def _run():
+            try:
+                if not self._cli_set_param.wait_for_service(timeout_sec=2.0):
+                    if done_cb:
+                        done_cb(False, 'rby1_rt_node param service not available')
+                    return
+                pv = ParameterValue()
+                pv.type = ParameterType.PARAMETER_STRING
+                pv.string_value = model
+                p = RosParameter()
+                p.name = 'robot_model'
+                p.value = pv
+                req = SetParameters.Request()
+                req.parameters = [p]
+                future = self._cli_set_param.call_async(req)
+                deadline = time.monotonic() + 5.0
+                while not future.done():
+                    if time.monotonic() > deadline:
+                        if done_cb:
+                            done_cb(False, 'set_robot_model timeout')
+                        return
+                    time.sleep(0.02)
+                result = future.result()
+                ok = all(r.successful for r in result.results)
+                reason = next((r.reason for r in result.results if not r.successful), '')
+                if done_cb:
+                    done_cb(ok, reason)
+            except Exception as e:
+                if done_cb:
+                    done_cb(False, str(e))
+        threading.Thread(target=_run, daemon=True).start()
 
     def call_connect(self, host: str, no_gripper: bool, done_cb=None):
         req = ConnectRobot.Request()
@@ -329,8 +371,8 @@ class TeleopGuiWindow(QWidget):
         self._rec_state = 'IDLE'
         self._stream_on = False
 
-        # Load named poses
-        self._named_poses, self._current_teleop_pose = _load_named_poses()
+        # Load named poses and persisted settings
+        self._named_poses, self._current_teleop_pose, self._current_robot_model = _load_named_poses()
 
         signals.pedal_updated.connect(self._on_pedal)
         signals.node_status_updated.connect(self._on_nodes)
@@ -420,6 +462,16 @@ class TeleopGuiWindow(QWidget):
         self._chk_no_gripper = QCheckBox('No Gripper')
         self._chk_no_gripper.setChecked(True)
 
+        # Robot model selection (A = differential 2-wheel, M = mecanum 4-wheel)
+        self._rb_model_a = QRadioButton('Model A')
+        self._rb_model_m = QRadioButton('Model M')
+        self._rb_model_a.setChecked(self._current_robot_model != 'm')
+        self._rb_model_m.setChecked(self._current_robot_model == 'm')
+        self._bg_model = QButtonGroup(self)
+        self._bg_model.addButton(self._rb_model_a, 0)
+        self._bg_model.addButton(self._rb_model_m, 1)
+        self._bg_model.idClicked.connect(self._on_model_changed)
+
         self._btn_connect = _make_btn('Connect', '#1565C0', height=30)
         self._btn_connect.setFixedWidth(90)
         self._btn_connect.clicked.connect(self._on_connect)
@@ -432,6 +484,8 @@ class TeleopGuiWindow(QWidget):
         row.addWidget(self._rb_real)
         row.addWidget(self._le_ip)
         row.addWidget(self._chk_no_gripper)
+        row.addWidget(self._rb_model_a)
+        row.addWidget(self._rb_model_m)
         row.addWidget(self._btn_connect)
         row.addWidget(self._lbl_conn_status)
         row.addStretch()
@@ -578,7 +632,7 @@ class TeleopGuiWindow(QWidget):
             'joint_names': list(BODY_JOINT_NAMES),
             'positions': positions,
         }
-        _save_named_poses(self._named_poses, self._cmb_teleop_pose.currentText())
+        _save_named_poses(self._named_poses, self._cmb_teleop_pose.currentText(), self._current_robot_model)
         # Update dropdowns
         for cmb in (self._cmb_preset, self._cmb_teleop_pose):
             if cmb.findText(name) < 0:
@@ -590,7 +644,7 @@ class TeleopGuiWindow(QWidget):
         if name not in self._named_poses:
             return
         self._current_teleop_pose = name
-        _save_named_poses(self._named_poses, name)
+        _save_named_poses(self._named_poses, name, self._current_robot_model)
         pose = self._named_poses[name]
         self._node.call_set_teleop_pose(
             pose.get('positions', []), pose.get('joint_names', []))
@@ -800,19 +854,31 @@ class TeleopGuiWindow(QWidget):
         self._le_ip.setText(
             'localhost:50051' if btn_id == 0 else '192.168.30.1:50051')
 
+    def _on_model_changed(self, btn_id: int):
+        self._current_robot_model = 'a' if btn_id == 0 else 'm'
+        _save_named_poses(self._named_poses, self._current_teleop_pose, self._current_robot_model)
+        self._node.set_robot_model(self._current_robot_model)
+
     def _on_connect(self):
         host = self._le_ip.text().strip()
         no_gripper = self._chk_no_gripper.isChecked()
+        model = 'a' if self._bg_model.checkedId() == 0 else 'm'
         self._btn_connect.setEnabled(False)
         self._lbl_conn_status.setText('Connecting...')
         self._lbl_conn_status.setStyleSheet('color: #888;')
 
-        def _done(ok, msg):
-            self._sig.service_result.emit(ok, f'connect: {msg}')
-            self._sig.connect_result.emit(ok, msg)
-            QTimer.singleShot(0, lambda: self._btn_connect.setEnabled(True))
+        def _after_param(ok, param_msg):
+            if not ok:
+                self._node.get_logger().warning(f'[GUI] set robot_model failed: {param_msg}')
 
-        self._node.call_connect(host, no_gripper, done_cb=_done)
+            def _done(ok, msg):
+                self._sig.service_result.emit(ok, f'connect: {msg}')
+                self._sig.connect_result.emit(ok, msg)
+                QTimer.singleShot(0, lambda: self._btn_connect.setEnabled(True))
+
+            self._node.call_connect(host, no_gripper, done_cb=_done)
+
+        self._node.set_robot_model(model, done_cb=_after_param)
 
     def _on_service_result(self, ok: bool, msg: str):
         if not ok:
@@ -822,9 +888,13 @@ class TeleopGuiWindow(QWidget):
         if ok:
             self._lbl_conn_status.setText('Connected')
             self._lbl_conn_status.setStyleSheet('color: #A6D256; font-weight: bold;')
+            self._rb_model_a.setEnabled(False)
+            self._rb_model_m.setEnabled(False)
         else:
             self._lbl_conn_status.setText(f'Failed: {msg}')
             self._lbl_conn_status.setStyleSheet('color: #E53935; font-weight: bold;')
+            self._rb_model_a.setEnabled(True)
+            self._rb_model_m.setEnabled(True)
 
     def _on_rby1_status(self, data: dict):
         power   = data.get('power_state',   'False') == 'True'
