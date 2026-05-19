@@ -134,6 +134,9 @@ class TeleopGuiNode(Node):
         self.create_subscription(String, '/teleop/tracker_status', self._cb_tracker_status, 10)
         self.create_subscription(String, '/rby1/state/status',     self._cb_rby1_status,    10)
         self.create_subscription(String, '/teleop/clutch_state',   self._cb_clutch_state,   10)
+        self.create_subscription(JointState, '/rby1/state/joint', self._cb_joint_state, 10)
+        self._latest_joint_state = None
+        self._next_joint_cb = None
         self.create_timer(1.0, self._poll_nodes)
 
         # Service clients — rby1_rt
@@ -193,6 +196,19 @@ class TeleopGuiNode(Node):
     def _cb_clutch_state(self, msg):
         for cb in self._clutch_state_cbs:
             cb(msg.data)
+
+    def _cb_joint_state(self, msg):
+        self._latest_joint_state = msg
+        if self._next_joint_cb is not None:
+            cb = self._next_joint_cb
+            self._next_joint_cb = None
+            cb(list(msg.name), list(msg.position))
+
+    def get_latest_joint_state(self):
+        return self._latest_joint_state
+
+    def request_next_joint_state(self, cb):
+        self._next_joint_cb = cb
 
     def _poll_nodes(self):
         names  = {n for n, _ in self.get_node_names_and_namespaces()}
@@ -334,6 +350,7 @@ class Signals(QObject):
     service_result         = Signal(bool, str)
     connect_result         = Signal(bool, str)
     execute_done           = Signal(bool, str)
+    joint_state_received   = Signal(list, list)
 
 
 # ---------------------------------------------------------------------------
@@ -386,6 +403,7 @@ class TeleopGuiWindow(QWidget):
         signals.clutch_state_changed.connect(self._on_clutch_state)
         signals.service_result.connect(self._on_service_result)
         signals.connect_result.connect(self._on_connect_result)
+        signals.joint_state_received.connect(self._on_joint_state_received)
 
         self._build_ui()
 
@@ -445,9 +463,13 @@ class TeleopGuiWindow(QWidget):
             row.addWidget(lbl)
         return row
 
-    def _build_connect_row(self) -> QHBoxLayout:
-        row = QHBoxLayout()
-        row.setSpacing(6)
+    def _build_connect_row(self) -> QVBoxLayout:
+        outer = QVBoxLayout()
+        outer.setSpacing(4)
+
+        # Top row: Sim / Real + IP + Connect + status
+        top_row = QHBoxLayout()
+        top_row.setSpacing(6)
 
         self._rb_sim  = QRadioButton('Sim')
         self._rb_real = QRadioButton('Real')
@@ -458,9 +480,26 @@ class TeleopGuiWindow(QWidget):
         self._bg_conn.idClicked.connect(self._on_sim_real_changed)
 
         self._le_ip = QLineEdit('localhost:50051')
-        self._le_ip.setFixedWidth(200)
-        self._chk_no_gripper = QCheckBox('No Gripper')
-        self._chk_no_gripper.setChecked(True)
+        self._le_ip.setFixedWidth(140)
+
+        self._btn_connect = _make_btn('Connect', '#1565C0', height=30)
+        self._btn_connect.setFixedWidth(90)
+        self._btn_connect.clicked.connect(self._on_connect)
+
+        self._lbl_conn_status = QLabel('')
+        self._lbl_conn_status.setFont(QFont('Monospace', 9))
+        self._lbl_conn_status.setFixedHeight(26)
+
+        top_row.addWidget(self._rb_sim)
+        top_row.addWidget(self._rb_real)
+        top_row.addWidget(self._le_ip)
+        top_row.addWidget(self._btn_connect)
+        top_row.addWidget(self._lbl_conn_status)
+        top_row.addStretch()
+
+        # Bottom row: Model A / Model M + No Gripper
+        bot_row = QHBoxLayout()
+        bot_row.setSpacing(6)
 
         # Robot model selection (A = differential 2-wheel, M = mecanum 4-wheel)
         self._rb_model_a = QRadioButton('Model A')
@@ -472,24 +511,17 @@ class TeleopGuiWindow(QWidget):
         self._bg_model.addButton(self._rb_model_m, 1)
         self._bg_model.idClicked.connect(self._on_model_changed)
 
-        self._btn_connect = _make_btn('Connect', '#1565C0', height=30)
-        self._btn_connect.setFixedWidth(90)
-        self._btn_connect.clicked.connect(self._on_connect)
+        self._chk_no_gripper = QCheckBox('No Gripper')
+        self._chk_no_gripper.setChecked(True)
 
-        self._lbl_conn_status = QLabel('')
-        self._lbl_conn_status.setFont(QFont('Monospace', 9))
-        self._lbl_conn_status.setFixedHeight(26)
+        bot_row.addWidget(self._rb_model_a)
+        bot_row.addWidget(self._rb_model_m)
+        bot_row.addWidget(self._chk_no_gripper)
+        bot_row.addStretch()
 
-        row.addWidget(self._rb_sim)
-        row.addWidget(self._rb_real)
-        row.addWidget(self._le_ip)
-        row.addWidget(self._chk_no_gripper)
-        row.addWidget(self._rb_model_a)
-        row.addWidget(self._rb_model_m)
-        row.addWidget(self._btn_connect)
-        row.addWidget(self._lbl_conn_status)
-        row.addStretch()
-        return row
+        outer.addLayout(top_row)
+        outer.addLayout(bot_row)
+        return outer
 
     def _build_init_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
@@ -529,48 +561,65 @@ class TeleopGuiWindow(QWidget):
         self._cmb_preset.currentTextChanged.connect(self._on_preset_selected)
         self._btn_execute = _make_btn('Execute', '#2E7D32', height=30)
         self._btn_execute.clicked.connect(self._on_execute_joint)
-        self._sig.execute_done.connect(
-            lambda ok, msg: (self._btn_execute.setEnabled(True),
-                             self._sig.service_result.emit(ok, msg)))
+        self._sig.execute_done.connect(self._on_execute_done)
+        self._btn_load_current = _make_btn('↓ Load Current Pos', '#795548', height=30)
+        self._btn_load_current.clicked.connect(self._on_load_current_joints)
+        self._le_preset_name = QLineEdit()
+        self._le_preset_name.setPlaceholderText('preset name')
+        self._le_preset_name.setFixedWidth(110)
+        self._btn_save_preset = _make_btn('Save', '#546E7A', height=30)
+        self._btn_save_preset.clicked.connect(self._on_save_preset)
         preset_row.addWidget(QLabel('Preset:'))
         preset_row.addWidget(self._cmb_preset)
         preset_row.addWidget(self._btn_execute)
+        preset_row.addWidget(self._btn_load_current)
+        preset_row.addSpacing(20)
+        preset_row.addWidget(QLabel('Save as:'))
+        preset_row.addWidget(self._le_preset_name)
+        preset_row.addWidget(self._btn_save_preset)
         preset_row.addStretch()
         left_vbox.addLayout(preset_row)
 
-        # Joint input grid (20 joints, 2 columns of 10)
+        # Joint input grid — 3 columns: Torso | Right Arm | Left Arm
         self._joint_spins = {}
         self._filling_preset = False
-        joint_grid = QGridLayout()
-        joint_grid.setSpacing(3)
-        for idx, name in enumerate(BODY_JOINT_NAMES):
-            col_base = (idx // 10) * 2
-            row_pos  = idx % 10
-            lbl = QLabel(name)
-            lbl.setFont(QFont('Monospace', 8))
-            spin = QDoubleSpinBox()
-            spin.setDecimals(4)
-            spin.setRange(-6.28, 6.28)
-            spin.setSingleStep(0.01)
-            spin.setFixedWidth(90)
-            spin.valueChanged.connect(self._on_joint_spin_changed)
-            joint_grid.addWidget(lbl,  row_pos, col_base)
-            joint_grid.addWidget(spin, row_pos, col_base + 1)
-            self._joint_spins[name] = spin
-        left_vbox.addLayout(joint_grid)
+        _groups = [
+            ('Torso',     BODY_JOINT_NAMES[:6]),
+            ('Right Arm', BODY_JOINT_NAMES[6:13]),
+            ('Left Arm',  BODY_JOINT_NAMES[13:]),
+        ]
+        cols_layout = QHBoxLayout()
+        cols_layout.setSpacing(12)
+        for group_name, joints in _groups:
+            col_vbox = QVBoxLayout()
+            col_vbox.setSpacing(2)
+            hdr = QLabel(group_name)
+            hdr_font = QFont('Monospace', 9)
+            hdr_font.setBold(True)
+            hdr.setFont(hdr_font)
+            hdr.setAlignment(Qt.AlignCenter)
+            hdr.setStyleSheet(
+                'background-color: #37474F; color: white; padding: 2px; border-radius: 3px;')
+            col_vbox.addWidget(hdr)
+            for name in joints:
+                jrow = QHBoxLayout()
+                jrow.setSpacing(3)
+                lbl = QLabel(name)
+                lbl.setFont(QFont('Monospace', 8))
+                spin = QDoubleSpinBox()
+                spin.setDecimals(2)
+                spin.setRange(-6.28, 6.28)
+                spin.setSingleStep(0.01)
+                spin.setFixedWidth(80)
+                spin.valueChanged.connect(self._on_joint_spin_changed)
+                jrow.addWidget(lbl)
+                jrow.addWidget(spin)
+                col_vbox.addLayout(jrow)
+                self._joint_spins[name] = spin
+            col_vbox.addStretch()
+            cols_layout.addLayout(col_vbox)
+        left_vbox.addLayout(cols_layout)
 
-        # Save preset row
-        save_row = QHBoxLayout()
-        save_row.addWidget(QLabel('Save as:'))
-        self._le_preset_name = QLineEdit()
-        self._le_preset_name.setPlaceholderText('preset name')
-        self._le_preset_name.setFixedWidth(130)
-        self._btn_save_preset = _make_btn('Save', '#546E7A', height=28)
-        self._btn_save_preset.clicked.connect(self._on_save_preset)
-        save_row.addWidget(self._le_preset_name)
-        save_row.addWidget(self._btn_save_preset)
-        save_row.addStretch()
-        left_vbox.addLayout(save_row)
         main_row.addLayout(left_vbox, 3)
 
         # Right: Teleop Pose selector
@@ -619,9 +668,19 @@ class TeleopGuiWindow(QWidget):
     def _on_execute_joint(self):
         positions = [self._joint_spins[n].value() for n in BODY_JOINT_NAMES]
         self._btn_execute.setEnabled(False)
+        self._btn_execute.setText('Executing...')
+        self._btn_execute.setStyleSheet(
+            'background-color: #F57C00; color: white; font-weight: bold;')
         self._node.call_move_to_joint_position(
             positions, BODY_JOINT_NAMES, min_time=0.0,
             done_cb=lambda ok, msg: self._sig.execute_done.emit(ok, msg))
+
+    def _on_execute_done(self, ok: bool, msg: str):
+        self._btn_execute.setEnabled(True)
+        self._btn_execute.setText('Execute')
+        self._btn_execute.setStyleSheet(
+            'background-color: #2E7D32; color: white; font-weight: bold;')
+        self._sig.service_result.emit(ok, msg)
 
     def _on_save_preset(self):
         name = self._le_preset_name.text().strip()
@@ -648,6 +707,24 @@ class TeleopGuiWindow(QWidget):
         pose = self._named_poses[name]
         self._node.call_set_teleop_pose(
             pose.get('positions', []), pose.get('joint_names', []))
+
+    def _on_load_current_joints(self):
+        self._btn_load_current.setEnabled(False)
+        self._btn_load_current.setText('Waiting...')
+        self._node.request_next_joint_state(
+            lambda names, pos: self._sig.joint_state_received.emit(names, pos))
+
+    def _on_joint_state_received(self, names: list, positions: list):
+        self._filling_preset = True
+        try:
+            for name, val in zip(names, positions):
+                if name in self._joint_spins:
+                    self._joint_spins[name].setValue(round(val, 2))
+        finally:
+            self._filling_preset = False
+        self._cmb_preset.setCurrentIndex(-1)
+        self._btn_load_current.setEnabled(True)
+        self._btn_load_current.setText('↓ Load Current Pos')
 
     # ── Teleop group ───────────────────────────────────────────────────────
 
