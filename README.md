@@ -23,7 +23,7 @@ A GUI node (`teleop_gui`) provides live system status, teleop controls, tracker 
 
 ## Published Topics
 
-### rby1_rt_node (hw-core)
+### rby1_core_node (hw-core)
 
 | Topic | Type | Description |
 |-------|------|-------------|

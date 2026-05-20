@@ -465,7 +465,7 @@ class ViveRby1Node : public rclcpp::Node {
       ref_body_   = tracker_b_.smoothed;
       torso5_0_   = ik_solver_->framePlacement("link_torso_5");
     }
-    // SDK FK(rby1_rt) vs pinocchio FK(공칭 URDF) 간 Z 오프셋 보정
+    // SDK FK(rby1_core) vs pinocchio FK(공칭 URDF) 간 Z 오프셋 보정
     // 측정값(ready pose): 우 +2.6cm, 좌 +3.9cm (SDK FK가 더 높음)
     sdk_ee_r_0_->translation().z() += 0.026;
     sdk_ee_l_0_->translation().z() += 0.039;
@@ -877,7 +877,7 @@ class ViveRby1Node : public rclcpp::Node {
     const pinocchio::SE3 left_target(dR_l_robot * ee_l_0_->rotation(), target_pos_l);
     const pinocchio::SE3 right_target(dR_r_robot * ee_r_0_->rotation(), target_pos_r);
 
-    // CartesianImpedance: rby1_rt targets ee_right/ee_left (not tracker frame).
+    // CartesianImpedance: rby1_core targets ee_right/ee_left (not tracker frame).
     // Re-anchor the delta from the tracker frame onto the ee frame reference.
     const pinocchio::SE3 sdk_right_target(
       dR_r_robot * sdk_ee_r_0_->rotation(),

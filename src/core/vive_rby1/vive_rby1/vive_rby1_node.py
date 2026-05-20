@@ -2,17 +2,26 @@
 vive_rby1_node.py
 Vive Tracker teleoperation bridge for RB-Y1.
 
+This is the DEBUG node (vive_rby1_debug_node), the Python twin of the C++
+production node. It uses pink-based IK (rby1_ik) instead of the C++
+DifferentialIkSolver. It talks to hw-core over the same /rby1/* interface.
+
 Subscriptions:
   /teleop/tracker/left    geometry_msgs/PoseStamped  (from vive_ros2)
   /teleop/tracker/right   geometry_msgs/PoseStamped  (from vive_ros2)
-  /teleop/pedal           sensor_msgs/Joy            (from pedal driver)
-  /rby1_status_joint      sensor_msgs/JointState     (from rby1 SDK)
+  /rby1/state/joint       sensor_msgs/JointState     (from hw-core rby1_core_node)
   /teleop/task_id         std_msgs/Int32             (from teleop_gui dropdown)
 
-Publications:
-  /rby1_teleop_command    interbotix_xs_msgs/JointGroupCommand
+Publications (to hw-core):
+  /rby1/cmd/joint         sensor_msgs/JointState     (pink_position / pink_impedance)
+  /rby1/cmd/pose          rby1_core_msgs/LinkPoseCommand (sdk_position / sdk_impedance)
   /teleop/rec_state       std_msgs/String            (IDLE / READY / RECORDING / PAUSED)
   /teleop/rec_episode     std_msgs/Int32             (current episode_id, -1 when IDLE)
+
+hw-core lifecycle (client):
+  /rby1/ctrl/mode             SetControlMode  (mode select)
+  /rby1/stream                SetStream       (teleop start/stop)
+  /rby1/move_to_joint_position MoveToJointPosition (move to ready pose)
 
 Services (server):
   /vive_rby1/toggle_episode  std_srvs/Trigger        (GUI Start/End Episode button)
@@ -42,7 +51,6 @@ Delta computation (robot frame):
   target_rot  = (v2r_R @ dR @ v2r_R.T) @ ee_rot_at_engage
 """
 
-import threading
 import time
 from collections import deque
 import numpy as np
@@ -51,26 +59,37 @@ from scipy.spatial.transform import Rotation as R, Slerp
 
 import rclpy
 from rclpy.node import Node
-from rclpy.action import ActionClient
-from geometry_msgs.msg import PoseStamped, PoseArray, Pose
+from geometry_msgs.msg import PoseStamped, Pose
 from sensor_msgs.msg import Joy, JointState
 from std_msgs.msg import Int32, String
 from std_srvs.srv import Trigger
-from interbotix_xs_msgs.msg import JointGroupCommand
-try:
-    from rby1_core_msgs.action import Rby1Command
-    _HAS_RBY1_CORE_MSGS = True
-except ImportError:
-    _HAS_RBY1_CORE_MSGS = False
 
+from rby1_core_msgs.srv import SetControlMode, SetStream, MoveToJointPosition
+from rby1_core_msgs.msg import LinkPoseCommand
 from scm_recording_msgs.srv import StartRecording, EndRecording, TogglePause
-from rby1_ik.rby1_ik import Rby1Ik
+from rby1_ik.rby1_ik import Rby1Ik, get_rby1_body_joint_name_list
 
 
 REC_IDLE      = 'IDLE'
 REC_READY     = 'READY'
 REC_RECORDING = 'RECORDING'
 REC_PAUSED    = 'PAUSED'
+
+# Ready pose (degrees), matches hw-core build_ready_q(). Sent via
+# /rby1/move_to_joint_position because the old "ready_pose" verb was removed.
+READY_Q_DEG = {
+    'torso':     [0.0, 30.0, -60.0, 30.0, 0.0, 0.0],
+    'right_arm': [-8.68, -9.86,  1.89, -103.95,  0.37, 22.07, -10.35],
+    'left_arm':  [-8.68,  9.86, -1.89, -103.95, -0.37, 22.07,  10.35],
+}
+
+# Maps GUI ik_mode → hw-core SetControlMode (source, control).
+_MODE_MAP = {
+    'pink_position':  ('joint',     'position'),
+    'pink_impedance': ('joint',     'impedance'),
+    'sdk_position':   ('cartesian', 'position'),
+    'sdk_impedance':  ('cartesian', 'impedance'),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -138,8 +157,7 @@ class ViveRby1Node(Node):
         self.declare_parameter('topic_tracker_right',  '/teleop/tracker/right')
         self.declare_parameter('topic_tracker_body',   '/teleop/tracker/body')
         self.declare_parameter('topic_pedal',          '/teleop/pedal')
-        self.declare_parameter('topic_joint_state',    '/rby1_status_joint')
-        self.declare_parameter('topic_teleop_command', '/rby1_teleop_command')
+        self.declare_parameter('topic_joint_state',    '/rby1/state/joint')
         self.declare_parameter('pos_scale',            2.0)
         self.declare_parameter('ik_dt',                0.05)
         self.declare_parameter('publish_rate',         20.0)
@@ -155,7 +173,6 @@ class ViveRby1Node(Node):
         topic_b   = self.get_parameter('topic_tracker_body').value
         topic_p   = self.get_parameter('topic_pedal').value
         topic_js  = self.get_parameter('topic_joint_state').value
-        topic_cmd = self.get_parameter('topic_teleop_command').value
 
         self._pos_scale         = self.get_parameter('pos_scale').value
         self._ik_dt             = self.get_parameter('ik_dt').value
@@ -234,10 +251,9 @@ class ViveRby1Node(Node):
         self.create_subscription(String, '/teleop/rby1_command',   self._cb_rby1_command,   10)
         self.create_subscription(String, '/teleop/mirror_mode',    self._cb_mirror_mode,    10)
 
-        # Publishers
-        self._pub_cmd           = self.create_publisher(JointGroupCommand, topic_cmd,                          10)
-        self._pub_impedance_cmd = self.create_publisher(JointGroupCommand, '/rby1_impedance_teleop_command',   10)
-        self._pub_sdk_target    = self.create_publisher(PoseArray,         '/rby1_sdk_teleop_command',         10)
+        # Publishers (to hw-core)
+        self._pub_joint_cmd     = self.create_publisher(JointState,      '/rby1/cmd/joint', 10)  # pink_position/impedance
+        self._pub_pose_cmd      = self.create_publisher(LinkPoseCommand, '/rby1/cmd/pose',  10)  # sdk_position/impedance
         self._pub_rec_state     = self.create_publisher(String,            '/teleop/rec_state',                10)
         self._pub_rec_ep        = self.create_publisher(Int32,             '/teleop/rec_episode',              10)
         self._pub_tracker_status = self.create_publisher(String,           '/teleop/tracker_status',           10)
@@ -247,12 +263,10 @@ class ViveRby1Node(Node):
         self._cli_end_rec      = self.create_client(EndRecording,   '/scm_recording/end')
         self._cli_toggle_pause = self.create_client(TogglePause,    '/scm_recording/toggle_pause')
 
-        # RB-Y1 command action client (optional — requires rby1_core_msgs)
-        if _HAS_RBY1_CORE_MSGS:
-            self._rby1_client = ActionClient(self, Rby1Command, '/rby1_command')
-        else:
-            self._rby1_client = None
-            self.get_logger().warn('[vive_rby1] rby1_core_msgs not found — vla_pose2 disabled')
+        # hw-core lifecycle service clients
+        self._cli_set_mode   = self.create_client(SetControlMode,      '/rby1/ctrl/mode')
+        self._cli_stream     = self.create_client(SetStream,           '/rby1/stream')
+        self._cli_move_joint = self.create_client(MoveToJointPosition, '/rby1/move_to_joint_position')
 
         # Service server: GUI Start/End Episode button
         self.create_service(Trigger, '/vive_rby1/toggle_episode', self._srv_toggle_episode)
@@ -330,12 +344,13 @@ class ViveRby1Node(Node):
     def _cb_rby1_command(self, msg: String):
         cmd = msg.data
         if cmd == 'teleop_start':
-            cmd = {
-                'pink_impedance': 'impedance_teleop_start',
-                'sdk_position':   'sdk_position_teleop_start',
-                'sdk_impedance':  'sdk_impedance_teleop_start',
-            }.get(self._ik_mode, 'teleop_start')
-        self._send_rby1_command(cmd)
+            self._do_teleop_start()
+        elif cmd == 'teleop_stop':
+            self._do_teleop_stop()
+        elif cmd == 'ready_pose':
+            self._call_move_to_ready()
+        else:
+            self.get_logger().warn(f'[vive_rby1] unknown rby1_command: {cmd}')
 
     def _cb_pedal(self, _msg: Joy):
         # ---- Pedal 0: arm engage toggle (only when teleop is active) ----
@@ -456,12 +471,7 @@ class ViveRby1Node(Node):
             self.get_logger().info(
                 f'[vive_rby1] READY — task {result.task_id} ep {result.episode_id}')
             self._warmup_ticks = int(self._publish_rate)
-            start_cmd = {
-                'pink_impedance': 'impedance_teleop_start',
-                'sdk_position':   'sdk_position_teleop_start',
-                'sdk_impedance':  'sdk_impedance_teleop_start',
-            }.get(self._ik_mode, 'teleop_start')
-            self._send_rby1_command('ready_pose', then=start_cmd)
+            self._do_teleop_start()
         else:
             self.get_logger().error(f'StartRecording failed: {result.message}')
         self._publish_rec_state()
@@ -472,54 +482,109 @@ class ViveRby1Node(Node):
             self._rec_state   = REC_IDLE
             self._rec_episode = -1
             self._engaged     = False
-            self.get_logger().info('[vive_rby1] Recording ENDED — teleop_stop → ready_pose')
-            self._send_rby1_command('teleop_stop', then='ready_pose')
+            self.get_logger().info('[vive_rby1] Recording ENDED — stream off → ready_pose')
+            self._do_teleop_stop()
+            self._call_move_to_ready()
         else:
             self.get_logger().error(f'EndRecording failed: {result.message}')
         self._publish_rec_state()
 
-    def _send_rby1_command(self, command: str, then: str = None, on_complete=None):
-        if self._rby1_client is None:
-            if on_complete:
-                on_complete()
-            return
-        if not self._rby1_client.server_is_ready():
-            self.get_logger().warn(f'rby1_command server not ready — skipping "{command}"')
-            if on_complete:
-                on_complete()
-            return
-        if command == 'teleop_stop':
-            self._teleop_active = False
-            self._engaged = False
+    # ------------------------------------------------------------------
+    # hw-core lifecycle (service-based, async + done-callback chaining)
+    # ------------------------------------------------------------------
 
-        goal_msg = Rby1Command.Goal()
-        goal_msg.command = command
-        self.get_logger().info(f'[vive_rby1] sending rby1_command: {command}')
-        future = self._rby1_client.send_goal_async(goal_msg)
+    def _make_ready_target(self) -> JointState:
+        js = JointState()
+        js.name = get_rby1_body_joint_name_list()
+        deg = (READY_Q_DEG['torso'] + READY_Q_DEG['right_arm'] + READY_Q_DEG['left_arm'])
+        js.position = [float(np.deg2rad(v)) for v in deg]
+        return js
 
-        def _on_accepted(goal_future):
-            goal_handle = goal_future.result()
-            if not goal_handle.accepted:
-                self.get_logger().warn(f'rby1_command "{command}" rejected')
-                if on_complete:
-                    on_complete()
+    def _do_teleop_start(self):
+        """SetControlMode → MoveToJointPosition(ready) → SetStream(true), chained."""
+        if not self._cli_set_mode.service_is_ready():
+            self.get_logger().warn('[vive_rby1] /rby1/ctrl/mode not ready — skip teleop_start')
+            return
+        source, control = _MODE_MAP.get(self._ik_mode, ('cartesian', 'impedance'))
+        req = SetControlMode.Request()
+        req.source = source
+        req.control = control
+        self.get_logger().info(f'[vive_rby1] teleop_start: set mode {source}/{control}')
+        self._cli_set_mode.call_async(req).add_done_callback(self._after_set_mode)
+
+    def _after_set_mode(self, future):
+        try:
+            if not future.result().success:
+                self.get_logger().error('[vive_rby1] SetControlMode failed — abort teleop_start')
+                self._abort_arming()
                 return
-            def _on_result(result_future):
-                result = result_future.result()
-                succeeded = (result.status == 4)  # GoalStatus.STATUS_SUCCEEDED = 4
-                if command in ('teleop_start', 'impedance_teleop_start',
-                               'sdk_position_teleop_start', 'sdk_impedance_teleop_start'):
-                    if succeeded:
-                        self._teleop_active = True
-                    else:
-                        self._teleop_active = False
-                        self.get_logger().error(f'rby1_command "{command}" failed — stream may have expired')
-                if on_complete:
-                    on_complete()
-                if then and succeeded:
-                    threading.Timer(1.0, lambda: self._send_rby1_command(then)).start()
-            goal_handle.get_result_async().add_done_callback(_on_result)
-        future.add_done_callback(_on_accepted)
+        except Exception as e:
+            self.get_logger().error(f'[vive_rby1] SetControlMode exception: {e}')
+            self._abort_arming()
+            return
+        req = MoveToJointPosition.Request()
+        req.target = self._make_ready_target()
+        req.min_time = 5.0
+        self.get_logger().info('[vive_rby1] teleop_start: moving to ready pose')
+        self._cli_move_joint.call_async(req).add_done_callback(self._after_move_ready_start)
+
+    def _after_move_ready_start(self, future):
+        try:
+            if not future.result().success:
+                self.get_logger().error('[vive_rby1] MoveToJointPosition failed — abort teleop_start')
+                self._abort_arming()
+                return
+        except Exception as e:
+            self.get_logger().error(f'[vive_rby1] MoveToJointPosition exception: {e}')
+            self._abort_arming()
+            return
+        req = SetStream.Request()
+        req.enable = True
+        self.get_logger().info('[vive_rby1] teleop_start: starting stream')
+        self._cli_stream.call_async(req).add_done_callback(self._after_stream_on)
+
+    def _after_stream_on(self, future):
+        try:
+            ok = future.result().success
+        except Exception as e:
+            self.get_logger().error(f'[vive_rby1] SetStream exception: {e}')
+            ok = False
+        if ok:
+            self._teleop_active = True
+            self._warmup_ticks = int(self._publish_rate)
+            self.get_logger().info('[vive_rby1] teleop_start: complete')
+        else:
+            self.get_logger().error('[vive_rby1] SetStream failed — teleop not active')
+            self._abort_arming()
+
+    def _abort_arming(self):
+        # teleop_start failed mid-sequence; if we had just armed a recording
+        # session (READY, not yet engaged), revert it to IDLE.
+        self._teleop_active = False
+        self._warmup_ticks = 0
+        if self._rec_state == REC_READY:
+            self._rec_state = REC_IDLE
+            self._rec_episode = -1
+            self._publish_rec_state()
+
+    def _do_teleop_stop(self):
+        self._teleop_active = False
+        self._engaged = False
+        if not self._cli_stream.service_is_ready():
+            self.get_logger().warn('[vive_rby1] /rby1/stream not ready — skip teleop_stop')
+            return
+        req = SetStream.Request()
+        req.enable = False
+        self._cli_stream.call_async(req)
+
+    def _call_move_to_ready(self):
+        if not self._cli_move_joint.service_is_ready():
+            self.get_logger().warn('[vive_rby1] /rby1/move_to_joint_position not ready — skip ready_pose')
+            return
+        req = MoveToJointPosition.Request()
+        req.target = self._make_ready_target()
+        req.min_time = 5.0
+        self._cli_move_joint.call_async(req)
 
     def _on_toggle_pause_done(self, future):
         try:
@@ -595,7 +660,7 @@ class ViveRby1Node(Node):
         sr = self._tracker_status(self._tracker_buf_r, self._tracker_stamp_r)
         self._pub_tracker_status.publish(String(data=f'L:{sl} R:{sr}'))
 
-        # Warm-up: pink 모드만 joint 명령 pre-publish (SDK 모드는 /rby1_sdk_teleop_command 사용)
+        # Warm-up: pink 모드만 joint 명령 pre-publish (SDK 모드는 /rby1/cmd/pose 사용)
         if self._warmup_ticks > 0:
             self._warmup_ticks -= 1
             if not self._ik_mode.startswith('sdk_'):
@@ -661,11 +726,11 @@ class ViveRby1Node(Node):
                 return
             self._sdk_prev_l = sdk_l
             self._sdk_prev_r = sdk_r
-            pa = PoseArray()
-            pa.header.frame_id = 'base'
-            pa.header.stamp = self.get_clock().now().to_msg()
-            pa.poses.append(se3_to_pose(sdk_r))
-            pa.poses.append(se3_to_pose(sdk_l))
+            msg = LinkPoseCommand()
+            msg.header.frame_id = 'base'
+            msg.header.stamp = self.get_clock().now().to_msg()
+            msg.link_names = ['ee_right', 'ee_left']
+            msg.poses = [se3_to_pose(sdk_r), se3_to_pose(sdk_l)]
             # Torso target from body tracker (sdk_impedance only)
             if (self._ik_mode == 'sdk_impedance'
                     and self._ref_b is not None
@@ -682,26 +747,28 @@ class ViveRby1Node(Node):
                 sdk_torso = self._limit_sdk_target(self._sdk_prev_torso, torso_tgt, 'torso')
                 if sdk_torso is not None:
                     self._sdk_prev_torso = sdk_torso
-                    pa.poses.append(se3_to_pose(sdk_torso))
+                    msg.link_names.append('link_torso_5')
+                    msg.poses.append(se3_to_pose(sdk_torso))
             elif self._ik_mode == 'sdk_impedance':
                 self.get_logger().info(
                     f'[torso] skip: ref_b={self._ref_b is not None} '
                     f'torso_ref={self._torso_ref_se3 is not None} '
                     f'tracker_b={self._tracker_b_se3 is not None}',
                     throttle_duration_sec=2.0)
-            self._pub_sdk_target.publish(pa)
+            self._pub_pose_cmd.publish(msg)
         else:
             q20 = self._ik.solve_ik_to_q20(l_SE3, r_SE3, self._ik_dt)
             self._publish_q20(q20)
 
     def _publish_q20(self, q20: np.ndarray):
-        cmd = JointGroupCommand()
-        cmd.name = 'All'
-        cmd.cmd  = np.concatenate((q20, np.array([0., 0.]))).tolist()
-        if self._ik_mode == 'pink_impedance':
-            self._pub_impedance_cmd.publish(cmd)
-        else:
-            self._pub_cmd.publish(cmd)
+        # /rby1/cmd/joint is name-keyed (hw-core matches by joint name); the mode
+        # (JointPosition vs JointImpedance) is selected via SetControlMode, so
+        # both pink modes publish to the same topic. No gripper slots.
+        msg = JointState()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.name = get_rby1_body_joint_name_list()
+        msg.position = [float(v) for v in q20]
+        self._pub_joint_cmd.publish(msg)
 
 
 # ---------------------------------------------------------------------------

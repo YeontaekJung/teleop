@@ -55,7 +55,7 @@ NODES_TO_WATCH = [
     ('manus_data_publisher', 'manus_ros2'),
     ('vive_rby1_node',       'vive_rby1'),
     ('manus_inspire',        'manus_inspire'),
-    ('rby1_rt_node',         'rby1_rt'),
+    ('rby1_core_node',        'rby1_core'),
 ]
 
 REC_STATE_STYLE = {
@@ -139,7 +139,7 @@ class TeleopGuiNode(Node):
         self._next_joint_cb = None
         self.create_timer(1.0, self._poll_nodes)
 
-        # Service clients — rby1_rt
+        # Service clients — rby1_core
         self._cli_connect      = self.create_client(ConnectRobot,        '/rby1/connect')
         self._cli_power        = self.create_client(SetPower,            '/rby1/power')
         self._cli_servo        = self.create_client(SetServo,            '/rby1/servo')
@@ -149,7 +149,7 @@ class TeleopGuiNode(Node):
         self._cli_stop_move    = self.create_client(Trigger,             '/rby1/stop_move')
         self._cli_ctrl_mode    = self.create_client(SetControlMode,      '/rby1/ctrl/mode')
         self._cli_move_joint   = self.create_client(MoveToJointPosition, '/rby1/move_to_joint_position')
-        self._cli_set_param    = self.create_client(SetParameters,        '/rby1_rt_node/set_parameters')
+        self._cli_set_param    = self.create_client(SetParameters,        '/rby1_core_node/set_parameters')
 
         # Service clients — vive_rby1
         self._cli_teleop_start  = self.create_client(Trigger,       '/vive_rby1/teleop_start')
@@ -252,12 +252,12 @@ class TeleopGuiNode(Node):
     # ── service call methods ────────────────────────────────────────────────
 
     def set_robot_model(self, model: str, done_cb=None):
-        """Set robot_model parameter on rby1_rt_node (must be called before connect)."""
+        """Set robot_model parameter on rby1_core_node (must be called before connect)."""
         def _run():
             try:
                 if not self._cli_set_param.wait_for_service(timeout_sec=2.0):
                     if done_cb:
-                        done_cb(False, 'rby1_rt_node param service not available')
+                        done_cb(False, 'rby1_core_node param service not available')
                     return
                 pv = ParameterValue()
                 pv.type = ParameterType.PARAMETER_STRING
