@@ -9,7 +9,10 @@
 
   <exec_depend>pedal_ros2</exec_depend>
   <exec_depend>vive_ros2</exec_depend>
+  <exec_depend>manus_ros2</exec_depend>
+  <exec_depend>manus_inspire</exec_depend>
   <exec_depend>vive_rby1</exec_depend>
+  <exec_depend>scm_gui</exec_depend>
 
   <export>
     <build_type>ament_python</build_type>

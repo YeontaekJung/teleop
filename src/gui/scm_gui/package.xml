@@ -1,9 +1,9 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>teleop_gui</name>
+  <name>scm_gui</name>
   <version>0.0.1</version>
-  <description>PySide6 GUI for teleoperation system status and calibration control</description>
+  <description>PySide6 GUI for SCM system status and control</description>
   <maintainer email="todo@todo.com">todo</maintainer>
   <license>MIT</license>
 

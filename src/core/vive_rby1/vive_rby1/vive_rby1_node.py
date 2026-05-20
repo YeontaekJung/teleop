@@ -10,7 +10,7 @@ Subscriptions:
   /teleop/tracker/left    geometry_msgs/PoseStamped  (from vive_ros2)
   /teleop/tracker/right   geometry_msgs/PoseStamped  (from vive_ros2)
   /rby1/state/joint       sensor_msgs/JointState     (from hw-core rby1_core_node)
-  /teleop/task_id         std_msgs/Int32             (from teleop_gui dropdown)
+  /teleop/task_id         std_msgs/Int32             (from scm_gui dropdown)
 
 Publications (to hw-core):
   /rby1/cmd/joint         sensor_msgs/JointState     (pink_position / pink_impedance)

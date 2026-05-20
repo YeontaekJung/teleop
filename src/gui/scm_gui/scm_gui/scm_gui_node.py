@@ -1,5 +1,5 @@
 """
-teleop_gui_node.py  (v3 — service-based interface)
+scm_gui_node.py  (v3 — service-based interface)
 
 Top:    RB-Y1 area  — connect, status, power/servo/pose controls
 Middle: Joint Position — preset dropdown, joint inputs, execute, save
@@ -79,7 +79,7 @@ def _get_config_yaml():
     try:
         from ament_index_python.packages import get_package_share_directory
         return os.path.join(
-            get_package_share_directory('teleop_gui'), 'config', 'named_poses.yaml')
+            get_package_share_directory('scm_gui'), 'config', 'named_poses.yaml')
     except Exception:
         pass
     return os.path.join(
@@ -119,10 +119,10 @@ def _save_named_poses(named_poses: dict, teleop_pose: str, robot_model: str = 'a
 # ROS2 node (background thread)
 # ---------------------------------------------------------------------------
 
-class TeleopGuiNode(Node):
+class ScmGuiNode(Node):
 
     def __init__(self):
-        super().__init__('teleop_gui')
+        super().__init__('scm_gui')
         self._pedal_state         = [0, 0, 0]
         self._pedal_cbs           = []
         self._node_status_cbs     = []
@@ -411,7 +411,7 @@ def _make_btn(text: str, color: str, text_color: str = 'white',
 
 class TeleopGuiWindow(QWidget):
 
-    def __init__(self, ros_node: TeleopGuiNode, signals: Signals):
+    def __init__(self, ros_node: ScmGuiNode, signals: Signals):
         super().__init__()
         self._node      = ros_node
         self._sig       = signals
@@ -443,7 +443,7 @@ class TeleopGuiWindow(QWidget):
     # ── UI construction ────────────────────────────────────────────────────
 
     def _build_ui(self):
-        self.setWindowTitle('Teleop Control')
+        self.setWindowTitle('SCM Control')
         self.setMinimumWidth(1100)
 
         root = QVBoxLayout()
@@ -462,16 +462,18 @@ class TeleopGuiWindow(QWidget):
         vbox.setSpacing(5)
         vbox.addLayout(self._build_status_row())
 
-        main_row = QHBoxLayout()
-        main_row.setSpacing(8)
-        main_row.addLayout(self._build_connect_row())
-
         self._btn_stop = QPushButton('⚠  STOP\nMOVE')
         self._btn_stop.setFixedSize(110, 70)
         self._btn_stop.setStyleSheet(
             'background-color: #FFD600; color: #000000;'
             'font-weight: bold; font-size: 13px;')
         self._btn_stop.clicked.connect(self._on_stop_move)
+
+        main_row = QHBoxLayout()
+        main_row.setSpacing(8)
+        main_row.addLayout(self._build_connect_settings_area())
+        main_row.addLayout(self._build_buttons_area())
+        main_row.addStretch()
         main_row.addWidget(self._btn_stop)
 
         vbox.addLayout(main_row)
@@ -492,13 +494,13 @@ class TeleopGuiWindow(QWidget):
             row.addWidget(lbl)
         return row
 
-    def _build_connect_row(self) -> QVBoxLayout:
+    def _build_connect_settings_area(self) -> QVBoxLayout:
         outer = QVBoxLayout()
         outer.setSpacing(4)
 
-        # Top row: Sim / Real + IP + Connect + robot control buttons
-        top_row = QHBoxLayout()
-        top_row.setSpacing(6)
+        # Row 1: Sim/Real 선택 + IP 입력
+        row1 = QHBoxLayout()
+        row1.setSpacing(6)
 
         self._rb_sim  = QRadioButton('Sim')
         self._rb_real = QRadioButton('Real')
@@ -511,57 +513,14 @@ class TeleopGuiWindow(QWidget):
         self._le_ip = QLineEdit('localhost:50051')
         self._le_ip.setFixedWidth(140)
 
-        self._btn_connect = _make_btn('Connect', '#1565C0', height=30)
-        self._btn_connect.setFixedWidth(90)
-        self._btn_connect.clicked.connect(self._on_connect)
+        row1.addWidget(self._rb_sim)
+        row1.addWidget(self._rb_real)
+        row1.addWidget(self._le_ip)
 
-        top_row.addWidget(self._rb_sim)
-        top_row.addWidget(self._rb_real)
-        top_row.addWidget(self._le_ip)
-        top_row.addWidget(self._btn_connect)
-        top_row.addSpacing(8)
+        # Row 2: Model 선택 + No Gripper
+        row2 = QHBoxLayout()
+        row2.setSpacing(6)
 
-        def _col(*btns):
-            col = QVBoxLayout()
-            col.setSpacing(3)
-            for b in btns:
-                col.addWidget(b)
-            return col
-
-        top_row.addLayout(_col(
-            self._make_btn_with_fb('Power On',  '#388E3C',
-                lambda cb: self._node.call_power(True,  done_cb=cb),
-                lambda ok, _: self._update_lbl(self._lbl_power,   'Power On',  _C_ON)      if ok else None),
-            self._make_btn_with_fb('Power Off', '#C62828',
-                lambda cb: self._node.call_power(False, done_cb=cb),
-                lambda ok, _: self._update_lbl(self._lbl_power,   'Power Off', _C_OFF_RED) if ok else None),
-        ))
-        top_row.addLayout(_col(
-            self._make_btn_with_fb('Servo On',  '#1976D2',
-                lambda cb: self._node.call_servo(True,  done_cb=cb),
-                lambda ok, _: self._update_lbl(self._lbl_servo,   'Servo On',  _C_ON)      if ok else None),
-            self._make_btn_with_fb('Servo Off', '#5C6BC0',
-                lambda cb: self._node.call_servo(False, done_cb=cb),
-                lambda ok, _: self._update_lbl(self._lbl_servo,   'Servo Off', _C_OFF_RED) if ok else None),
-        ))
-        top_row.addLayout(_col(
-            self._make_btn_with_fb('Ctrl Enable', '#7B1FA2',
-                lambda cb: self._node.call_trigger(self._node._cli_ctrl_enable, done_cb=cb),
-                lambda ok, _: self._update_lbl(self._lbl_control, 'Enabled',   _C_ON)      if ok else None),
-            self._make_btn_with_fb('Err Reset',   '#F57C00',
-                lambda cb: self._node.call_trigger(self._node._cli_err_reset,   done_cb=cb)),
-        ))
-        top_row.addLayout(_col(
-            self._make_btn_with_fb('Gripper Init', '#00838F',
-                lambda cb: self._node.call_trigger(self._node._cli_gripper_init, done_cb=cb)),
-        ))
-        top_row.addStretch()
-
-        # Bottom row: Model A / Model M + No Gripper
-        bot_row = QHBoxLayout()
-        bot_row.setSpacing(6)
-
-        # Robot model selection (A = differential 2-wheel, M = mecanum 4-wheel)
         self._rb_model_a = QRadioButton('Model A')
         self._rb_model_m = QRadioButton('Model M')
         self._rb_model_a.setChecked(self._current_robot_model != 'm')
@@ -574,14 +533,51 @@ class TeleopGuiWindow(QWidget):
         self._chk_no_gripper = QCheckBox('No Gripper')
         self._chk_no_gripper.setChecked(True)
 
-        bot_row.addWidget(self._rb_model_a)
-        bot_row.addWidget(self._rb_model_m)
-        bot_row.addWidget(self._chk_no_gripper)
-        bot_row.addStretch()
+        row2.addWidget(self._rb_model_a)
+        row2.addWidget(self._rb_model_m)
+        row2.addWidget(self._chk_no_gripper)
 
-        outer.addLayout(top_row)
-        outer.addLayout(bot_row)
+        outer.addLayout(row1)
+        outer.addLayout(row2)
         return outer
+
+    def _build_buttons_area(self) -> QHBoxLayout:
+        row = QHBoxLayout()
+        row.setSpacing(8)
+
+        self._btn_connect = _make_btn('Connect', '#1565C0', height=30)
+        self._btn_connect.setFixedWidth(90)
+        self._btn_connect.clicked.connect(self._on_connect)
+
+        btn_grid = QGridLayout()
+        btn_grid.setSpacing(3)
+
+        # Row 0: all main buttons at the same height
+        btn_grid.addWidget(self._btn_connect, 0, 0)
+        btn_grid.addWidget(self._make_btn_with_fb('Power On',  '#388E3C',
+            lambda cb: self._node.call_power(True,  done_cb=cb),
+            lambda ok, _: self._update_lbl(self._lbl_power,   'Power On',  _C_ON)      if ok else None), 0, 1)
+        btn_grid.addWidget(self._make_btn_with_fb('Servo On',  '#1976D2',
+            lambda cb: self._node.call_servo(True,  done_cb=cb),
+            lambda ok, _: self._update_lbl(self._lbl_servo,   'Servo On',  _C_ON)      if ok else None), 0, 2)
+        btn_grid.addWidget(self._make_btn_with_fb('Err Reset',   '#F57C00',
+            lambda cb: self._node.call_trigger(self._node._cli_err_reset,   done_cb=cb)), 0, 3)
+        btn_grid.addWidget(self._make_btn_with_fb('Ctrl Enable', '#7B1FA2',
+            lambda cb: self._node.call_trigger(self._node._cli_ctrl_enable, done_cb=cb),
+            lambda ok, _: self._update_lbl(self._lbl_control, 'Enabled',   _C_ON)      if ok else None), 0, 4)
+        btn_grid.addWidget(self._make_btn_with_fb('Gripper Init', '#00838F',
+            lambda cb: self._node.call_trigger(self._node._cli_gripper_init, done_cb=cb)), 0, 5)
+
+        # Row 1: off buttons directly below their on counterparts
+        btn_grid.addWidget(self._make_btn_with_fb('Power Off', '#C62828',
+            lambda cb: self._node.call_power(False, done_cb=cb),
+            lambda ok, _: self._update_lbl(self._lbl_power,   'Power Off', _C_OFF_RED) if ok else None), 1, 1)
+        btn_grid.addWidget(self._make_btn_with_fb('Servo Off', '#5C6BC0',
+            lambda cb: self._node.call_servo(False, done_cb=cb),
+            lambda ok, _: self._update_lbl(self._lbl_servo,   'Servo Off', _C_OFF_RED) if ok else None), 1, 2)
+
+        row.addLayout(btn_grid)
+        return row
 
     # ── Joint Position group ───────────────────────────────────────────────
 
@@ -624,6 +620,7 @@ class TeleopGuiWindow(QWidget):
         # Joint input grid — 3 columns: Torso | Right Arm | Left Arm
         self._joint_spins = {}
         self._joint_deg_labels = {}
+        self._joint_limit_labels = {}
         self._filling_preset = False
         _groups = [
             ('Torso',     BODY_JOINT_NAMES[:6]),
@@ -655,6 +652,11 @@ class TeleopGuiWindow(QWidget):
                 jrow.setSpacing(3)
                 lbl = QLabel(name)
                 lbl.setFont(QFont('Monospace', 8))
+                lim_lbl = QLabel('')
+                lim_lbl.setFont(QFont('Monospace', 7))
+                lim_lbl.setFixedWidth(84)
+                lim_lbl.setAlignment(Qt.AlignCenter)
+                lim_lbl.setStyleSheet('color: #555555;')
                 spin = QDoubleSpinBox()
                 spin.setDecimals(2)
                 spin.setRange(-6.28, 6.28)
@@ -666,14 +668,16 @@ class TeleopGuiWindow(QWidget):
                 deg_lbl.setFont(QFont('Monospace', 8))
                 deg_lbl.setFixedWidth(58)
                 deg_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-                deg_lbl.setStyleSheet('color: #CCCCCC;')
+                deg_lbl.setStyleSheet('color: #555555;')
                 _make_deg_updater(deg_lbl, spin)
                 jrow.addWidget(lbl)
+                jrow.addWidget(lim_lbl)
                 jrow.addWidget(spin)
                 jrow.addWidget(deg_lbl)
                 col_vbox.addLayout(jrow)
                 self._joint_spins[name] = spin
                 self._joint_deg_labels[name] = deg_lbl
+                self._joint_limit_labels[name] = lim_lbl
             col_vbox.addStretch()
             cols_layout.addLayout(col_vbox)
         left_vbox.addLayout(cols_layout)
@@ -1109,6 +1113,9 @@ class TeleopGuiWindow(QWidget):
                 continue
             lo_d, hi_d = math.degrees(lo), math.degrees(hi)
             spin.setToolTip(f'Limit: {lo_d:.1f}° ~ {hi_d:.1f}°')
+            lim_lbl = self._joint_limit_labels.get(name)
+            if lim_lbl is not None:
+                lim_lbl.setText(f'({lo:.2f},  {hi:.2f})')
             self._check_joint_limit(name, spin.value())
 
     def _check_joint_limit(self, name: str, val: float):
@@ -1284,7 +1291,7 @@ class TeleopGuiWindow(QWidget):
 
 def main(args=None):
     rclpy.init(args=args)
-    ros_node = TeleopGuiNode()
+    ros_node = ScmGuiNode()
     signals  = Signals()
 
     ros_node._pedal_cbs.append(          lambda s:    signals.pedal_updated.emit(s))

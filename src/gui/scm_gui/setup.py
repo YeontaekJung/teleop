@@ -1,6 +1,6 @@
 from setuptools import find_packages, setup
 
-package_name = 'teleop_gui'
+package_name = 'scm_gui'
 
 setup(
     name=package_name,
@@ -15,7 +15,7 @@ setup(
     zip_safe=True,
     entry_points={
         'console_scripts': [
-            'teleop_gui_node = teleop_gui.teleop_gui_node:main',
+            'scm_gui_node = scm_gui.scm_gui_node:main',
         ],
     },
 )
