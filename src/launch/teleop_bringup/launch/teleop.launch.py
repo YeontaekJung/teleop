@@ -1,3 +1,5 @@
+import os
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, GroupAction
 from launch.conditions import IfCondition
@@ -18,18 +20,22 @@ def generate_launch_description():
     vive_on   = AndSubstitution(use_vive,  not_sim)
     manus_on  = AndSubstitution(use_manus, not_sim)
 
+    _share = get_package_share_directory('vive_rby1')
+    _default_urdf = os.path.join(_share, 'robot_description', 'rby1', 'rby1.urdf')
+    _default_srdf = os.path.join(_share, 'robot_description', 'rby1', 'rby1.srdf')
+
     return LaunchDescription([
 
         # ── Launch arguments ───────────────────────────────────────────────
         DeclareLaunchArgument(
             'urdf_path',
-            default_value='',
-            description='Absolute path to rby1.urdf (required for IK; pass via urdf_path:=<path>)'),
+            default_value=_default_urdf,
+            description='Absolute path to rby1.urdf (override with urdf_path:=<path>)'),
 
         DeclareLaunchArgument(
             'srdf_path',
-            default_value='',
-            description='Absolute path to rby1.srdf (pass via srdf_path:=<path>)'),
+            default_value=_default_srdf,
+            description='Absolute path to rby1.srdf (override with srdf_path:=<path>)'),
 
         DeclareLaunchArgument(
             'sim',

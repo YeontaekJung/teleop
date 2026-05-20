@@ -1298,7 +1298,7 @@ def main(args=None):
     ros_node._node_status_cbs.append(    lambda s:    signals.node_status_updated.emit(s))
     ros_node._rec_state_cbs.append(      lambda s:    signals.rec_state_changed.emit(s))
     ros_node._rec_episode_cbs.append(    lambda e:    signals.rec_episode_changed.emit(e))
-    ros_node._tracker_status_cbs.append( lambda l, r: signals.tracker_status_changed.emit(l, r))
+    ros_node._tracker_status_cbs.append( lambda l, r, b: signals.tracker_status_changed.emit(l, r, b))
     ros_node._rby1_status_cbs.append(    lambda d:    signals.rby1_status_changed.emit(d))
     ros_node._clutch_state_cbs.append(   lambda s:    signals.clutch_state_changed.emit(s))
 
