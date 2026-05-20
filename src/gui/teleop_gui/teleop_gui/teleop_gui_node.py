@@ -7,6 +7,7 @@ Bottom: Teleop area  — node status, pedal, teleop, recording, calibration
 """
 
 import json
+import math
 import os
 import sys
 import threading
@@ -49,14 +50,17 @@ BODY_JOINT_NAMES = [
     'left_arm_4', 'left_arm_5', 'left_arm_6',
 ]
 
-NODES_TO_WATCH = [
+CORE_NODES = [
+    ('rby1_core_node', 'rby1_core'),
+]
+TELEOP_NODES = [
     ('pedal_node',           'pedal_ros2'),
     ('vive_tracker_node',    'vive_ros2'),
     ('manus_data_publisher', 'manus_ros2'),
     ('vive_rby1_node',       'vive_rby1'),
     ('manus_inspire',        'manus_inspire'),
-    ('rby1_core_node',        'rby1_core'),
 ]
+NODES_TO_WATCH = CORE_NODES + TELEOP_NODES
 
 REC_STATE_STYLE = {
     'IDLE':      ('⬤ IDLE',      '#888888'),
@@ -180,10 +184,11 @@ class TeleopGuiNode(Node):
 
     def _cb_tracker_status(self, msg):
         parts = msg.data.split()
-        sl = parts[0].split(':')[1]
-        sr = parts[1].split(':')[1]
+        sl = parts[0].split(':')[1] if len(parts) > 0 else ''
+        sr = parts[1].split(':')[1] if len(parts) > 1 else ''
+        sb = parts[2].split(':')[1] if len(parts) > 2 and parts[2].startswith('sb:') else ''
         for cb in self._tracker_status_cbs:
-            cb(sl, sr)
+            cb(sl, sr, sb)
 
     def _cb_rby1_status(self, msg):
         try:
@@ -289,7 +294,30 @@ class TeleopGuiNode(Node):
         req = ConnectRobot.Request()
         req.host = host
         req.no_gripper = no_gripper
-        self._call_async(self._cli_connect, req, done_cb, timeout_sec=15.0)
+        def _run():
+            if not self._cli_connect.wait_for_service(timeout_sec=2.0):
+                if done_cb:
+                    done_cb(False, 'service not available', [], [], [])
+                return
+            fut = self._cli_connect.call_async(req)
+            deadline = time.monotonic() + 15.0
+            while not fut.done():
+                if time.monotonic() > deadline:
+                    if done_cb:
+                        done_cb(False, 'timeout', [], [], [])
+                    return
+                time.sleep(0.02)
+            try:
+                res = fut.result()
+                names = list(res.joint_names) if res.success else []
+                lower = list(res.q_lower)     if res.success else []
+                upper = list(res.q_upper)     if res.success else []
+                if done_cb:
+                    done_cb(res.success, res.message, names, lower, upper)
+            except Exception as e:
+                if done_cb:
+                    done_cb(False, str(e), [], [], [])
+        threading.Thread(target=_run, daemon=True).start()
 
     def call_power(self, enable: bool, done_cb=None):
         req = SetPower.Request()
@@ -344,13 +372,15 @@ class Signals(QObject):
     calib_failed           = Signal(str)
     rec_state_changed      = Signal(str)
     rec_episode_changed    = Signal(int)
-    tracker_status_changed = Signal(str, str)
+    tracker_status_changed = Signal(str, str, str)   # sl, sr, sb(body)
     rby1_status_changed    = Signal(dict)
     clutch_state_changed   = Signal(str)
     service_result         = Signal(bool, str)
     connect_result         = Signal(bool, str)
     execute_done           = Signal(bool, str)
     joint_state_received   = Signal(list, list)
+    joint_limits_received  = Signal(object)
+    dispatch               = Signal(object)   # call a callable on the main thread
 
 
 # ---------------------------------------------------------------------------
@@ -404,6 +434,9 @@ class TeleopGuiWindow(QWidget):
         signals.service_result.connect(self._on_service_result)
         signals.connect_result.connect(self._on_connect_result)
         signals.joint_state_received.connect(self._on_joint_state_received)
+        signals.joint_limits_received.connect(self._on_joint_limits_received)
+
+        self._joint_limits = {}
 
         self._build_ui()
 
@@ -417,6 +450,7 @@ class TeleopGuiWindow(QWidget):
         root.setSpacing(6)
         root.addWidget(self._build_rby1_group())
         root.addWidget(self._build_joint_position_group())
+        root.addWidget(self._build_node_indicators_group())
         root.addWidget(self._build_teleop_group())
         self.setLayout(root)
 
@@ -427,25 +461,20 @@ class TeleopGuiWindow(QWidget):
         vbox  = QVBoxLayout()
         vbox.setSpacing(5)
         vbox.addLayout(self._build_status_row())
-        vbox.addLayout(self._build_connect_row())
 
-        bottom = QHBoxLayout()
-        bottom.setSpacing(8)
-        left = QVBoxLayout()
-        left.setSpacing(4)
-        left.addLayout(self._build_init_row())
-        bottom.addLayout(left, 1)
+        main_row = QHBoxLayout()
+        main_row.setSpacing(8)
+        main_row.addLayout(self._build_connect_row())
 
-        btn_stop = QPushButton('⚠  STOP\nMOVE')
-        btn_stop.setFixedSize(110, 70)
-        btn_stop.setStyleSheet(
+        self._btn_stop = QPushButton('⚠  STOP\nMOVE')
+        self._btn_stop.setFixedSize(110, 70)
+        self._btn_stop.setStyleSheet(
             'background-color: #FFD600; color: #000000;'
             'font-weight: bold; font-size: 13px;')
-        btn_stop.clicked.connect(
-            lambda: self._node.call_trigger(self._node._cli_stop_move))
-        bottom.addWidget(btn_stop)
+        self._btn_stop.clicked.connect(self._on_stop_move)
+        main_row.addWidget(self._btn_stop)
 
-        vbox.addLayout(bottom)
+        vbox.addLayout(main_row)
         group.setLayout(vbox)
         return group
 
@@ -467,7 +496,7 @@ class TeleopGuiWindow(QWidget):
         outer = QVBoxLayout()
         outer.setSpacing(4)
 
-        # Top row: Sim / Real + IP + Connect + status
+        # Top row: Sim / Real + IP + Connect + robot control buttons
         top_row = QHBoxLayout()
         top_row.setSpacing(6)
 
@@ -486,15 +515,46 @@ class TeleopGuiWindow(QWidget):
         self._btn_connect.setFixedWidth(90)
         self._btn_connect.clicked.connect(self._on_connect)
 
-        self._lbl_conn_status = QLabel('')
-        self._lbl_conn_status.setFont(QFont('Monospace', 9))
-        self._lbl_conn_status.setFixedHeight(26)
-
         top_row.addWidget(self._rb_sim)
         top_row.addWidget(self._rb_real)
         top_row.addWidget(self._le_ip)
         top_row.addWidget(self._btn_connect)
-        top_row.addWidget(self._lbl_conn_status)
+        top_row.addSpacing(8)
+
+        def _col(*btns):
+            col = QVBoxLayout()
+            col.setSpacing(3)
+            for b in btns:
+                col.addWidget(b)
+            return col
+
+        top_row.addLayout(_col(
+            self._make_btn_with_fb('Power On',  '#388E3C',
+                lambda cb: self._node.call_power(True,  done_cb=cb),
+                lambda ok, _: self._update_lbl(self._lbl_power,   'Power On',  _C_ON)      if ok else None),
+            self._make_btn_with_fb('Power Off', '#C62828',
+                lambda cb: self._node.call_power(False, done_cb=cb),
+                lambda ok, _: self._update_lbl(self._lbl_power,   'Power Off', _C_OFF_RED) if ok else None),
+        ))
+        top_row.addLayout(_col(
+            self._make_btn_with_fb('Servo On',  '#1976D2',
+                lambda cb: self._node.call_servo(True,  done_cb=cb),
+                lambda ok, _: self._update_lbl(self._lbl_servo,   'Servo On',  _C_ON)      if ok else None),
+            self._make_btn_with_fb('Servo Off', '#5C6BC0',
+                lambda cb: self._node.call_servo(False, done_cb=cb),
+                lambda ok, _: self._update_lbl(self._lbl_servo,   'Servo Off', _C_OFF_RED) if ok else None),
+        ))
+        top_row.addLayout(_col(
+            self._make_btn_with_fb('Ctrl Enable', '#7B1FA2',
+                lambda cb: self._node.call_trigger(self._node._cli_ctrl_enable, done_cb=cb),
+                lambda ok, _: self._update_lbl(self._lbl_control, 'Enabled',   _C_ON)      if ok else None),
+            self._make_btn_with_fb('Err Reset',   '#F57C00',
+                lambda cb: self._node.call_trigger(self._node._cli_err_reset,   done_cb=cb)),
+        ))
+        top_row.addLayout(_col(
+            self._make_btn_with_fb('Gripper Init', '#00838F',
+                lambda cb: self._node.call_trigger(self._node._cli_gripper_init, done_cb=cb)),
+        ))
         top_row.addStretch()
 
         # Bottom row: Model A / Model M + No Gripper
@@ -522,25 +582,6 @@ class TeleopGuiWindow(QWidget):
         outer.addLayout(top_row)
         outer.addLayout(bot_row)
         return outer
-
-    def _build_init_row(self) -> QHBoxLayout:
-        row = QHBoxLayout()
-        row.setSpacing(5)
-
-        def _btn(label, color, fn):
-            b = _make_btn(label, color, height=30)
-            b.clicked.connect(fn)
-            row.addWidget(b)
-            return b
-
-        _btn('Power On',    '#388E3C', lambda: self._node.call_power(True))
-        _btn('Power Off',   '#C62828', lambda: self._node.call_power(False))
-        _btn('Servo On',    '#1976D2', lambda: self._node.call_servo(True))
-        _btn('Err Reset',   '#F57C00', lambda: self._node.call_trigger(self._node._cli_err_reset))
-        _btn('Ctrl Enable', '#7B1FA2', lambda: self._node.call_trigger(self._node._cli_ctrl_enable))
-        _btn('Gripper Init','#00838F', lambda: self._node.call_trigger(self._node._cli_gripper_init))
-        row.addStretch()
-        return row
 
     # ── Joint Position group ───────────────────────────────────────────────
 
@@ -582,6 +623,7 @@ class TeleopGuiWindow(QWidget):
 
         # Joint input grid — 3 columns: Torso | Right Arm | Left Arm
         self._joint_spins = {}
+        self._joint_deg_labels = {}
         self._filling_preset = False
         _groups = [
             ('Torso',     BODY_JOINT_NAMES[:6]),
@@ -590,6 +632,13 @@ class TeleopGuiWindow(QWidget):
         ]
         cols_layout = QHBoxLayout()
         cols_layout.setSpacing(12)
+
+        def _make_deg_updater(label, sp):
+            def _upd(v):
+                label.setText(f'{math.degrees(v):+.1f}°')
+            sp.valueChanged.connect(_upd)
+            _upd(sp.value())
+
         for group_name, joints in _groups:
             col_vbox = QVBoxLayout()
             col_vbox.setSpacing(2)
@@ -611,31 +660,25 @@ class TeleopGuiWindow(QWidget):
                 spin.setRange(-6.28, 6.28)
                 spin.setSingleStep(0.01)
                 spin.setFixedWidth(80)
-                spin.valueChanged.connect(self._on_joint_spin_changed)
+                spin.valueChanged.connect(
+                    lambda val, n=name: self._on_joint_spin_changed(n, val))
+                deg_lbl = QLabel('+  0.0°')
+                deg_lbl.setFont(QFont('Monospace', 8))
+                deg_lbl.setFixedWidth(58)
+                deg_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                deg_lbl.setStyleSheet('color: #CCCCCC;')
+                _make_deg_updater(deg_lbl, spin)
                 jrow.addWidget(lbl)
                 jrow.addWidget(spin)
+                jrow.addWidget(deg_lbl)
                 col_vbox.addLayout(jrow)
                 self._joint_spins[name] = spin
+                self._joint_deg_labels[name] = deg_lbl
             col_vbox.addStretch()
             cols_layout.addLayout(col_vbox)
         left_vbox.addLayout(cols_layout)
 
-        main_row.addLayout(left_vbox, 3)
-
-        # Right: Teleop Pose selector
-        right_vbox = QVBoxLayout()
-        right_vbox.setSpacing(6)
-        right_vbox.addWidget(QLabel('Teleop Start/Stop Pose:'))
-        self._cmb_teleop_pose = QComboBox()
-        self._cmb_teleop_pose.setMinimumWidth(140)
-        for name in self._named_poses:
-            self._cmb_teleop_pose.addItem(name)
-        if self._current_teleop_pose in self._named_poses:
-            self._cmb_teleop_pose.setCurrentText(self._current_teleop_pose)
-        self._cmb_teleop_pose.currentTextChanged.connect(self._on_teleop_pose_changed)
-        right_vbox.addWidget(self._cmb_teleop_pose)
-        right_vbox.addStretch()
-        main_row.addLayout(right_vbox, 1)
+        main_row.addLayout(left_vbox)
 
         if 'zero' in self._named_poses:
             self._cmb_preset.setCurrentText('zero')
@@ -658,9 +701,10 @@ class TeleopGuiWindow(QWidget):
         finally:
             self._filling_preset = False
 
-    def _on_joint_spin_changed(self):
+    def _on_joint_spin_changed(self, name: str, val: float):
         if not self._filling_preset:
             self._cmb_preset.setCurrentIndex(-1)
+        self._check_joint_limit(name, val)
 
     def _on_preset_selected(self, name: str):
         self._fill_joint_fields(name)
@@ -726,53 +770,89 @@ class TeleopGuiWindow(QWidget):
         self._btn_load_current.setEnabled(True)
         self._btn_load_current.setText('↓ Load Current Pos')
 
+    # ── Node Indicators group ─────────────────────────────────────────────
+
+    def _build_node_indicators_group(self) -> QGroupBox:
+        group = QGroupBox('Node Indicators')
+        hbox = QHBoxLayout()
+        hbox.setSpacing(4)
+        self._node_dots = {}
+
+        sections = [
+            ('core',           CORE_NODES,   1),
+            ('vision',         [],           1),
+            ('statemachine',   [],           1),
+            ('motion planning', [],          1),
+            ('driving',        [],           1),
+            ('VLA',            [],           1),
+            ('teleop',         TELEOP_NODES, 2),
+            ('recording',      [],           1),
+        ]
+
+        for title, nodes, stretch in sections:
+            sub = QGroupBox(title)
+            sub_vbox = QVBoxLayout()
+            sub_vbox.setSpacing(2)
+            sub_vbox.setContentsMargins(4, 4, 4, 4)
+            for node, pkg in nodes:
+                row = QHBoxLayout()
+                row.setSpacing(3)
+                dot = QLabel('●')
+                dot.setFont(QFont('Monospace', 11))
+                dot.setStyleSheet('color: #888;')
+                row.addWidget(dot)
+                row.addWidget(QLabel(pkg))
+                row.addStretch()
+                sub_vbox.addLayout(row)
+                self._node_dots[node] = dot
+            sub_vbox.addStretch()
+            sub.setLayout(sub_vbox)
+            hbox.addWidget(sub, stretch)
+
+        group.setLayout(hbox)
+        return group
+
     # ── Teleop group ───────────────────────────────────────────────────────
 
     def _build_teleop_group(self) -> QGroupBox:
         group = QGroupBox('Teleop')
         hbox  = QHBoxLayout()
         hbox.setSpacing(8)
-        hbox.addWidget(self._build_nodes_panel(), 2)
+
+        left_col = QVBoxLayout()
+        left_col.setSpacing(4)
+        left_col.addWidget(self._build_nodes_panel())
+        left_col.addWidget(self._build_calib_panel())
+        left_col.addStretch()
+        left_widget = QWidget()
+        left_widget.setLayout(left_col)
+
+        hbox.addWidget(left_widget, 2)
         hbox.addWidget(self._build_control_panel(), 2)
         hbox.addWidget(self._build_recording_panel(), 3)
-        hbox.addWidget(self._build_calib_panel(), 2)
         group.setLayout(hbox)
         return group
 
     def _build_nodes_panel(self) -> QGroupBox:
-        group = QGroupBox('Nodes')
+        group = QGroupBox('Tracker')
         vbox  = QVBoxLayout()
         vbox.setSpacing(3)
 
-        grid = QGridLayout()
-        grid.setSpacing(3)
-        self._node_dots = {}
-        for i, (node, pkg) in enumerate(NODES_TO_WATCH):
-            dot = QLabel('●')
-            dot.setFont(QFont('Monospace', 13))
-            dot.setStyleSheet('color: #888;')
-            grid.addWidget(dot, i, 0, Qt.AlignCenter)
-            grid.addWidget(QLabel(pkg), i, 1)
-            self._node_dots[node] = dot
-
-        n = len(NODES_TO_WATCH)
         self._lbl_tracker_l = QLabel('● L')
         self._lbl_tracker_r = QLabel('● R')
-        for lbl in (self._lbl_tracker_l, self._lbl_tracker_r):
+        self._lbl_tracker_b = QLabel('● B')
+        for lbl in (self._lbl_tracker_l, self._lbl_tracker_r, self._lbl_tracker_b):
             lbl.setFont(QFont('Monospace', 10))
             lbl.setStyleSheet('color: #888;')
         tr_row = QHBoxLayout()
+        tr_row.addStretch()
         tr_row.addWidget(self._lbl_tracker_l)
+        tr_row.addStretch()
+        tr_row.addWidget(self._lbl_tracker_b)
+        tr_row.addStretch()
         tr_row.addWidget(self._lbl_tracker_r)
         tr_row.addStretch()
-        tr_widget = QWidget()
-        tr_widget.setLayout(tr_row)
-        grid.addWidget(QLabel('Tracker'), n, 1)
-        grid.addWidget(tr_widget, n, 2)
-
-        vbox.addLayout(grid)
-        vbox.addSpacing(4)
-        vbox.addWidget(self._build_pedal_panel())
+        vbox.addLayout(tr_row)
         vbox.addStretch()
         group.setLayout(vbox)
         return group
@@ -798,12 +878,12 @@ class TeleopGuiWindow(QWidget):
 
         teleop_row = QHBoxLayout()
         teleop_row.setSpacing(5)
-        btn_ts = _make_btn('▶  Teleop Start', '#4CAF50', height=34)
-        btn_ts.clicked.connect(
-            lambda: self._node.call_trigger(self._node._cli_teleop_start))
-        btn_tp = _make_btn('■  Teleop Stop',  '#E53935', height=34)
-        btn_tp.clicked.connect(
-            lambda: self._node.call_trigger(self._node._cli_teleop_stop))
+        btn_ts = self._make_btn_with_fb('▶  Teleop Start', '#4CAF50',
+            lambda cb: self._node.call_trigger(self._node._cli_teleop_start, done_cb=cb),
+            height=34)
+        btn_tp = self._make_btn_with_fb('■  Teleop Stop',  '#E53935',
+            lambda cb: self._node.call_trigger(self._node._cli_teleop_stop,  done_cb=cb),
+            height=34)
         teleop_row.addWidget(btn_ts)
         teleop_row.addWidget(btn_tp)
         vbox.addLayout(teleop_row)
@@ -866,6 +946,20 @@ class TeleopGuiWindow(QWidget):
         mirror_row.addStretch()
         vbox.addLayout(mirror_row)
 
+        vbox.addSpacing(4)
+        pose_row = QHBoxLayout()
+        pose_row.addWidget(QLabel('Teleop Pose:'))
+        self._cmb_teleop_pose = QComboBox()
+        self._cmb_teleop_pose.setMinimumWidth(140)
+        for name in self._named_poses:
+            self._cmb_teleop_pose.addItem(name)
+        if self._current_teleop_pose in self._named_poses:
+            self._cmb_teleop_pose.setCurrentText(self._current_teleop_pose)
+        self._cmb_teleop_pose.currentTextChanged.connect(self._on_teleop_pose_changed)
+        pose_row.addWidget(self._cmb_teleop_pose)
+        pose_row.addStretch()
+        vbox.addLayout(pose_row)
+
         vbox.addStretch()
         group.setLayout(vbox)
         return group
@@ -879,30 +973,29 @@ class TeleopGuiWindow(QWidget):
         self._lbl_rec_state.setFont(QFont('Monospace', 12))
         self._lbl_rec_state.setStyleSheet('color: #888;')
 
-        task_row = QHBoxLayout()
-        task_row.addWidget(QLabel('task_id'))
+        task_ep_row = QHBoxLayout()
+        task_ep_row.addWidget(QLabel('task_id'))
         self._spin_task = QSpinBox()
         self._spin_task.setMinimum(0)
         self._spin_task.setMaximum(9999)
         self._spin_task.setFixedWidth(70)
         self._spin_task.valueChanged.connect(lambda v: self._node.pub_task_id(v))
-        task_row.addWidget(self._spin_task)
-        task_row.addStretch()
-
-        ep_row = QHBoxLayout()
-        ep_row.addWidget(QLabel('episode'))
+        task_ep_row.addWidget(self._spin_task)
+        task_ep_row.addSpacing(20)
+        task_ep_row.addWidget(QLabel('episode'))
         self._lbl_episode = QLabel('—')
         self._lbl_episode.setFont(QFont('Monospace', 11))
-        ep_row.addWidget(self._lbl_episode)
-        ep_row.addStretch()
+        task_ep_row.addWidget(self._lbl_episode)
+        task_ep_row.addStretch()
 
         self._btn_rec = _make_btn('▶  Start Episode', '#4CAF50', height=36)
         self._btn_rec.clicked.connect(self._on_rec_btn)
 
         vbox.addWidget(self._lbl_rec_state)
-        vbox.addLayout(task_row)
-        vbox.addLayout(ep_row)
+        vbox.addLayout(task_ep_row)
         vbox.addWidget(self._btn_rec)
+        vbox.addSpacing(4)
+        vbox.addWidget(self._build_pedal_panel())
         vbox.addStretch()
         group.setLayout(vbox)
         return group
@@ -936,22 +1029,55 @@ class TeleopGuiWindow(QWidget):
         _save_named_poses(self._named_poses, self._current_teleop_pose, self._current_robot_model)
         self._node.set_robot_model(self._current_robot_model)
 
+    # ── helpers ────────────────────────────────────────────────────────────
+
+    def _update_lbl(self, lbl, text: str, color: str):
+        lbl.setText(f'  {text}  ')
+        lbl.setStyleSheet(f'background-color: {color}; border-radius: 4px;')
+
+    def _make_btn_with_fb(self, label, color, fn, on_done=None, height=30):
+        """Button that disables itself while the service is in-flight and calls on_done(ok, msg)."""
+        b = _make_btn(label, color, height=height)
+        def _click():
+            b.setEnabled(False)
+            def _done(ok, msg):
+                def _update():
+                    if on_done:
+                        on_done(ok, msg)
+                    b.setEnabled(True)
+                self._sig.dispatch.emit(_update)
+            fn(_done)
+        b.clicked.connect(_click)
+        return b
+
+    def _on_stop_move(self):
+        self._btn_stop.setEnabled(False)
+        def _done(ok, msg):
+            self._sig.dispatch.emit(lambda: self._btn_stop.setEnabled(True))
+        self._node.call_trigger(self._node._cli_stop_move, done_cb=_done)
+
+    # ── service callbacks ──────────────────────────────────────────────────
+
     def _on_connect(self):
         host = self._le_ip.text().strip()
         no_gripper = self._chk_no_gripper.isChecked()
         model = 'a' if self._bg_model.checkedId() == 0 else 'm'
         self._btn_connect.setEnabled(False)
-        self._lbl_conn_status.setText('Connecting...')
-        self._lbl_conn_status.setStyleSheet('color: #888;')
+        self._btn_connect.setText('Connecting...')
+        self._btn_connect.setStyleSheet(
+            'background-color: #888; color: white; font-weight: bold; border-radius: 4px;')
 
         def _after_param(ok, param_msg):
             if not ok:
                 self._node.get_logger().warning(f'[GUI] set robot_model failed: {param_msg}')
 
-            def _done(ok, msg):
+            def _done(ok, msg, names, lower, upper):
                 self._sig.service_result.emit(ok, f'connect: {msg}')
                 self._sig.connect_result.emit(ok, msg)
-                QTimer.singleShot(0, lambda: self._btn_connect.setEnabled(True))
+                if ok and names:
+                    limits = {n: (lo, hi) for n, lo, hi in zip(names, lower, upper)}
+                    self._sig.joint_limits_received.emit(limits)
+                self._sig.dispatch.emit(lambda: self._btn_connect.setEnabled(True))
 
             self._node.call_connect(host, no_gripper, done_cb=_done)
 
@@ -963,15 +1089,37 @@ class TeleopGuiWindow(QWidget):
 
     def _on_connect_result(self, ok: bool, msg: str):
         if ok:
-            self._lbl_conn_status.setText('Connected')
-            self._lbl_conn_status.setStyleSheet('color: #A6D256; font-weight: bold;')
+            self._btn_connect.setText('Connected')
+            self._btn_connect.setStyleSheet(
+                'background-color: #2E7D32; color: white; font-weight: bold;')
             self._rb_model_a.setEnabled(False)
             self._rb_model_m.setEnabled(False)
         else:
-            self._lbl_conn_status.setText(f'Failed: {msg}')
-            self._lbl_conn_status.setStyleSheet('color: #E53935; font-weight: bold;')
+            self._btn_connect.setText('Failed')
+            self._btn_connect.setStyleSheet(
+                'background-color: #C62828; color: white; font-weight: bold;')
             self._rb_model_a.setEnabled(True)
             self._rb_model_m.setEnabled(True)
+
+    def _on_joint_limits_received(self, limits: dict):
+        self._joint_limits = limits
+        for name, (lo, hi) in limits.items():
+            spin = self._joint_spins.get(name)
+            if spin is None:
+                continue
+            lo_d, hi_d = math.degrees(lo), math.degrees(hi)
+            spin.setToolTip(f'Limit: {lo_d:.1f}° ~ {hi_d:.1f}°')
+            self._check_joint_limit(name, spin.value())
+
+    def _check_joint_limit(self, name: str, val: float):
+        spin = self._joint_spins.get(name)
+        if spin is None:
+            return
+        lo, hi = self._joint_limits.get(name, (None, None))
+        if lo is not None and (val < lo or val > hi):
+            spin.setStyleSheet('background-color: #C62828; color: white;')
+        else:
+            spin.setStyleSheet('')
 
     def _on_rby1_status(self, data: dict):
         power   = data.get('power_state',   'False') == 'True'
@@ -1012,10 +1160,11 @@ class TeleopGuiWindow(QWidget):
                 color = '#A6D256' if alive else '#ED325A'
                 self._node_dots[node].setStyleSheet(f'color: {color};')
 
-    def _on_tracker_status(self, sl: str, sr: str):
+    def _on_tracker_status(self, sl: str, sr: str, sb: str):
         _colors = {'OK': '#4CAF50', 'JITTER': '#F0C040', 'LOST': '#E0302A'}
         self._lbl_tracker_l.setStyleSheet(f'color: {_colors.get(sl, "#888")};')
         self._lbl_tracker_r.setStyleSheet(f'color: {_colors.get(sr, "#888")};')
+        self._lbl_tracker_b.setStyleSheet(f'color: {_colors.get(sb, "#888")};')
 
     def _on_clutch_state(self, state: str):
         engaged = (state == 'ENGAGED')
@@ -1068,11 +1217,9 @@ class TeleopGuiWindow(QWidget):
     def _on_rec_btn(self):
         self._node.pub_task_id(self._spin_task.value())
         self._btn_rec.setEnabled(False)
-        threading.Thread(
-            target=self._node.call_toggle_episode,
-            args=(lambda ok, _: self._btn_rec.setEnabled(True),),
-            daemon=True,
-        ).start()
+        self._node.call_toggle_episode(
+            done_cb=lambda ok, _: self._sig.dispatch.emit(
+                lambda: self._btn_rec.setEnabled(True)))
 
     # ── Calibration ────────────────────────────────────────────────────────
 
@@ -1147,6 +1294,8 @@ def main(args=None):
     ros_node._tracker_status_cbs.append( lambda l, r: signals.tracker_status_changed.emit(l, r))
     ros_node._rby1_status_cbs.append(    lambda d:    signals.rby1_status_changed.emit(d))
     ros_node._clutch_state_cbs.append(   lambda s:    signals.clutch_state_changed.emit(s))
+
+    signals.dispatch.connect(lambda fn: fn())
 
     spin_thread = threading.Thread(target=rclpy.spin, args=(ros_node,), daemon=True)
     spin_thread.start()

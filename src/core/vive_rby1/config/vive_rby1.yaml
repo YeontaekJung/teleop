@@ -15,5 +15,8 @@ vive_rby1_node:
     sdk_max_delta_pos: 0.03
     sdk_max_delta_rot_deg: 20.0
 
+    # IIR alpha for tracker orientation smoothing: 0=no filter (immediate), 0.9=heavy lag (~230ms)
+    tracker_smooth_alpha: 0.5
+
     pedal_engage_index: 0
     pedal_episode_index: 2

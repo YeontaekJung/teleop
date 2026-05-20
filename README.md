@@ -9,12 +9,12 @@ Designed to be extensible — additional robot platforms and input devices can b
 ```
 Input              Core                      Output
 ──────────────────────────────────────────────────────────────────────
-manus_ros2      →  manus_inspire          →  inspire_driver            (Inspire Hand)
-vive_ros2       →  vive_rby1 (+ rby1_ik)  →  /rby1_teleop_command      (RB-Y1, pink position)
-                                          →  /rby1_impedance_teleop_command  (RB-Y1, pink impedance)
-                                          →  /rby1_sdk_teleop_command   (RB-Y1, sdk position/impedance)
-pedal_ros2      →  clutch / recording     →  /scm_recording/start|end|toggle_pause
-rby1_core_msgs  →  /rby1_command          →  rby1_core_node            (pose commands)
+manus_ros2      →  manus_inspire          →  /rt/inspire_hand/ctrl/{l,r}   (Inspire Hand driver)
+vive_ros2       →  vive_rby1_node (C++)   →  /rby1/cmd/pose  (sdk_impedance/position → rby1_core_node)
+                   vive_rby1_debug_node   →  /rby1/cmd/joint (pink_position/impedance, debug only)
+                   (Python, manual only)  →  /rby1/cmd/pose  (sdk modes)
+pedal_ros2      →  vive_rby1 state machine→  /scm_recording/{start,end,toggle_pause}
+GUI             →  teleop_gui_node        →  /rby1/ctrl/mode, /rby1/stream services
 ```
 
 All msg/srv/action definitions are under `src/msgs/`.
@@ -27,19 +27,18 @@ A GUI node (`teleop_gui`) provides live system status, teleop controls, tracker 
 
 | Topic | Type | Description |
 |-------|------|-------------|
-| `/rby1_status` | `std_msgs/String` | JSON 시스템 상태 (control/power/servo/stream/ctr_type) |
-| `/rby1_status_joint` | `sensor_msgs/JointState` | 전체 joint 실제값 (position / velocity / torque) |
-| `/rby1_sdk_joint_state` | `sensor_msgs/JointState` | arm 14개 joint — warmup: actual, CartesianImpedance 스트림: IK reference (set_position) |
-| `/rby1_ee_pose` | `geometry_msgs/PoseArray` | SDK FK 기반 EE pose — poses[0]=ee_right, poses[1]=ee_left (base frame) |
+| `/rby1/state/status` | `std_msgs/String` | JSON 시스템 상태 (control/power/servo/stream/gripper/ctr_type) |
+| `/rby1/state/joint` | `sensor_msgs/JointState` | 전체 joint 실제값 (position / velocity / torque), 항상 100 Hz |
+| `/rby1/state/ee_pose` | `geometry_msgs/PoseArray` | SDK FK 기반 EE pose — poses[0]=ee_right, poses[1]=ee_left (base frame) |
+| `/rby1/cmd/joint_ik` | `sensor_msgs/JointState` | SDK IK reference (CartesianImpedance 스트림에서만 발행) |
 
 ### vive_rby1_node
 
 | Topic | Type | Description |
 |-------|------|-------------|
-| `/rby1_teleop_command` | `JointGroupCommand` | pink_position 모드 joint 명령 |
-| `/rby1_impedance_teleop_command` | `JointGroupCommand` | pink_impedance 모드 joint 명령 |
-| `/rby1_sdk_teleop_command` | `geometry_msgs/PoseArray` | sdk_position / sdk_impedance EE target — poses[0]=right, poses[1]=left |
-| `/teleop/rec_state` | `std_msgs/String` | 녹화 상태 (IDLE / READY / RECORDING / PAUSED) |
+| `/rby1/cmd/pose` | `rby1_core_msgs/LinkPoseCommand` | sdk_position / sdk_impedance EE target (C++ 프로덕션 노드) |
+| `/rby1/cmd/joint` | `sensor_msgs/JointState` | pink_position / pink_impedance joint 명령 (Python 디버그 노드만) |
+| `/teleop/rec_state` | `std_msgs/String` | 녹화 상태 (IDLE / ARMING / READY / RECORDING / PAUSED) |
 | `/teleop/rec_episode` | `std_msgs/Int32` | 현재 에피소드 번호 |
 | `/teleop/tracker_status` | `std_msgs/String` | 트래커 상태 (L:OK/JITTER/LOST R:OK/JITTER/LOST) |
 | `/teleop/clutch_state` | `std_msgs/String` | clutch engaged / disengaged |
@@ -176,9 +175,10 @@ Adjustable in `src/launch/teleop_bringup/launch/teleop.launch.py`:
 |-----------|---------|-------------|
 | `publish_rate` | 100.0 Hz | IK command publish rate |
 | `ik_dt` | 0.05 s | Differential IK time step (larger = faster tracking, more overshoot) |
-| `pos_scale` | 1.0 | Tracker-to-robot position scale (1.0 = 1:1) |
+| `pos_scale` | 0.5 | Tracker-to-robot position scale (hand trackers) |
+| `torso_pos_scale` | 1.0 | Body tracker position scale (torso) |
 
-`max_teleop_dq` (joint velocity clamp, rad/s) is set in `src/core/rby1_ik/rby1_ik/rby1_ik.py`.
+`max_teleop_dq` (joint velocity clamp, 1.5 rad/s) is hardcoded in `src/core/vive_rby1/src/vive_rby1_node.cpp`.
 
 ## Usage
 
@@ -196,10 +196,10 @@ Select in the GUI before starting a session (locked during active recording):
 
 | Mode | Topic | Description |
 |------|-------|-------------|
-| Pink Position | `/rby1_teleop_command` | Joint position tracking via differential IK |
-| Pink Impedance | `/rby1_impedance_teleop_command` | Joint impedance tracking via local IK |
-| SDK Position | `/rby1_sdk_teleop_command` | Cartesian end-effector targets as `geometry_msgs/PoseArray` |
-| SDK Impedance | `/rby1_sdk_teleop_command` | Cartesian impedance targets as `geometry_msgs/PoseArray` |
+| SDK Impedance | `/rby1/cmd/pose` | Cartesian impedance targets (C++ node, default launch) |
+| SDK Position | `/rby1/cmd/pose` | Cartesian position targets (C++ node) |
+| Pink Position | `/rby1/cmd/joint` | Joint position tracking via differential IK (Python debug node only) |
+| Pink Impedance | `/rby1/cmd/joint` | Joint impedance tracking via local IK (Python debug node only) |
 
 ### Teleoperation (without recording)
 
@@ -207,28 +207,29 @@ Use the GUI **Teleop** panel buttons directly:
 
 | Button | Action |
 |--------|--------|
-| ▶ Teleop Start | Start streaming joint commands (respects control mode) |
-| Zero Pose | Move robot to zero configuration |
+| ▶ Teleop Start | Set control mode → start stream (`/rby1/ctrl/mode` + `/rby1/stream` services) |
+| Ready Pose | Move robot to ready configuration (`/rby1/move_to_joint_position`) |
 | VLA Pose | Move robot to VLA home pose |
-| ■ Teleop Stop | Stop streaming |
+| ■ Teleop Stop | Stop stream |
 
 ### Recording Workflow
 
-Requires `scm_recording` core (`/scm_recording/*` services) and `rby1_core_node` (`/rby1_command` action server) to be running.
+Requires `scm_recording` core (`/scm_recording/*` services) and `rby1_core_node` to be running.
 
 1. Select `task_id` in the GUI Recording panel.
-2. Select control mode: **Position** or **Impedance**.
-3. Click **▶ Start Episode** (or press pedal C) — system sends `vla_pose2` then starts teleop automatically.
+2. Select control mode: **SDK Impedance** (default) or **SDK Position**.
+3. Click **▶ Start Episode** (or press pedal C) — system enters **ARMING** (sets control mode → moves to ready pose → starts stream), then **READY**.
 4. **Press pedal A** to engage arm → recording starts (RECORDING).
 5. **Press pedal A** to disengage → recording pauses (PAUSED).
 6. Repeat steps 4–5 to collect data across multiple engage cycles.
-7. Click **■ End Episode** (or press pedal C) when PAUSED — robot stops teleop, moves to `vla_pose2`, episode saved.
+7. Click **■ End Episode** (or press pedal C) when PAUSED — episode saved, robot returns to IDLE.
 
 Recording states:
 
 | State | Color | Meaning |
 |-------|-------|---------|
 | IDLE | grey | No active session |
+| ARMING | blue | Transient: setting mode + moving to ready pose + starting stream |
 | READY | yellow | Session started, waiting for arm engage |
 | RECORDING | red | Arm engaged, data being recorded |
 | PAUSED | orange | Arm disengaged, session still active |
@@ -293,7 +294,7 @@ ros2 run teleop_gui teleop_gui_node
 | `manus_ros2_msgs` | msgs | Manus glove message types |
 | `inspire_hand_msgs` | msgs | Inspire hand message types |
 | `scm_recording_msgs` | msgs | Recording core service definitions |
-| `rby1_core_msgs` | msgs | RB-Y1 core action definitions (`Rby1Command`) |
+| `rby1_core_msgs` | msgs | RB-Y1 core srv/msg definitions (10 services + `LinkPoseCommand`) |
 | `manus_inspire` | core | Manus glove data → Inspire hand commands + 4-phase calibration |
 | `rby1_ik` | core | Legacy Python IK helper kept for debug/experiments |
 | `vive_rby1` | core | Tracker delta → RB-Y1 joint commands, recording state machine |
@@ -325,9 +326,9 @@ ros2 run teleop_gui teleop_gui_node
 **ManusSDK not found**
 - Confirm `ManusSDK/include/ManusSDK.h` and `ManusSDK/lib/libManusSDK.so` exist at the repo root and are non-zero size.
 
-**`/rby1_command` action not available**
+**`rby1_core_node` services not available**
 - `rby1_core_node` must be running separately (not part of this repo).
-- Without it, VLA pose commands are skipped but teleop still works.
+- Without it, mode switching and ready pose moves will fail, but the GUI still launches.
 
 **Robot joint trembling**
 - Reduce `max_teleop_dq` in `rby1_ik.py` (currently 1.5 rad/s).

@@ -265,6 +265,7 @@ class ViveRby1Node : public rclcpp::Node {
     declare_parameter("pedal_engage_index", 0);
     declare_parameter("pedal_discard_index", 1);
     declare_parameter("pedal_episode_index", 2);
+    declare_parameter("tracker_smooth_alpha", 0.5);
 
     const auto urdf_path = get_parameter("urdf_path").as_string();
     const auto srdf_path = get_parameter("srdf_path").as_string();
@@ -283,20 +284,23 @@ class ViveRby1Node : public rclcpp::Node {
     pedal_engage_idx_  = static_cast<size_t>(get_parameter("pedal_engage_index").as_int());
     pedal_discard_idx_ = static_cast<size_t>(get_parameter("pedal_discard_index").as_int());
     pedal_episode_idx_ = static_cast<size_t>(get_parameter("pedal_episode_index").as_int());
+    tracker_smooth_alpha_ = get_parameter("tracker_smooth_alpha").as_double();
 
     ik_solver_ = std::make_unique<DifferentialIkSolver>(urdf_path, srdf_path);
     RCLCPP_INFO(get_logger(), "[vive_rby1] IK solver ready");
 
+    auto stream_qos = rclcpp::QoS(rclcpp::KeepLast(1)).best_effort();
     sub_tracker_l_ = create_subscription<geometry_msgs::msg::PoseStamped>(
-      topic_l, 10, std::bind(&ViveRby1Node::onTrackerLeft, this, std::placeholders::_1));
+      topic_l, stream_qos, std::bind(&ViveRby1Node::onTrackerLeft, this, std::placeholders::_1));
     sub_tracker_r_ = create_subscription<geometry_msgs::msg::PoseStamped>(
-      topic_r, 10, std::bind(&ViveRby1Node::onTrackerRight, this, std::placeholders::_1));
+      topic_r, stream_qos, std::bind(&ViveRby1Node::onTrackerRight, this, std::placeholders::_1));
     sub_tracker_b_ = create_subscription<geometry_msgs::msg::PoseStamped>(
-      topic_b, 10, std::bind(&ViveRby1Node::onTrackerBody, this, std::placeholders::_1));
+      topic_b, stream_qos, std::bind(&ViveRby1Node::onTrackerBody, this, std::placeholders::_1));
     sub_pedal_ = create_subscription<sensor_msgs::msg::Joy>(
-      topic_p, 10, std::bind(&ViveRby1Node::onPedal, this, std::placeholders::_1));
+      topic_p, rclcpp::QoS(rclcpp::KeepLast(5)).reliable(),
+      std::bind(&ViveRby1Node::onPedal, this, std::placeholders::_1));
     sub_joint_state_ = create_subscription<sensor_msgs::msg::JointState>(
-      topic_js, 10, std::bind(&ViveRby1Node::onJointState, this, std::placeholders::_1));
+      topic_js, stream_qos, std::bind(&ViveRby1Node::onJointState, this, std::placeholders::_1));
     sub_task_id_ = create_subscription<std_msgs::msg::Int32>(
       "/teleop/task_id", 10, [this](const std_msgs::msg::Int32::SharedPtr msg) {
         rec_task_id_ = msg->data;
@@ -304,10 +308,10 @@ class ViveRby1Node : public rclcpp::Node {
     sub_mirror_mode_ = create_subscription<std_msgs::msg::String>(
       "/teleop/mirror_mode", 10, std::bind(&ViveRby1Node::onMirrorMode, this, std::placeholders::_1));
 
-    pub_pose_cmd_ = create_publisher<rby1_core_msgs::msg::LinkPoseCommand>("/rby1/cmd/pose", 10);
+    pub_pose_cmd_ = create_publisher<rby1_core_msgs::msg::LinkPoseCommand>("/rby1/cmd/pose", stream_qos);
     // ── EE Pose → warmup hold ──────────────────────────────────────────
     sub_ee_pose_ = create_subscription<geometry_msgs::msg::PoseArray>(
-      "/rby1/state/ee_pose", 10,
+      "/rby1/state/ee_pose", stream_qos,
       [this](const geometry_msgs::msg::PoseArray::SharedPtr msg) { last_ee_pose_ = *msg; });
     // ─────────────────────────────────────────────────────────────────────
     pub_rec_state_ = create_publisher<std_msgs::msg::String>("/teleop/rec_state", 10);

@@ -3,3 +3,6 @@ bool no_gripper
 ---
 bool success
 string message
+string[] joint_names
+float64[] q_lower
+float64[] q_upper
