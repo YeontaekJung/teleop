@@ -44,7 +44,7 @@ def generate_launch_description():
 
         DeclareLaunchArgument(
             'use_manus',
-            default_value='false',
+            default_value='true',
             description='Launch Manus glove nodes (requires ManusSDK binary)'),
 
         DeclareLaunchArgument(
