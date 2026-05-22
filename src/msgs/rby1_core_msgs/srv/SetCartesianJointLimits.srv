@@ -1,0 +1,8 @@
+# Replace the active CartesianImpedance joint limits with this list.
+# Empty arrays = no change. Supported joints: torso_0~5, right_arm_0~6, left_arm_0~6.
+string[] joint_names
+float64[] min_rad
+float64[] max_rad
+---
+bool success
+string message

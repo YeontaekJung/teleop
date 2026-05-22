@@ -21,6 +21,7 @@ from std_srvs.srv import Trigger
 
 from rby1_core_msgs.srv import (
     ConnectRobot, SetPower, SetServo, SetControlMode, MoveToJointPosition,
+    SetCartesianJointLimits, SetNullspaceWeight, SetNullspaceJointRef,
 )
 from rcl_interfaces.srv import SetParameters
 from rcl_interfaces.msg import Parameter as RosParameter, ParameterValue, ParameterType
@@ -89,6 +90,41 @@ def _get_config_yaml():
 _CONFIG_YAML = _get_config_yaml()
 
 
+def _get_impedance_presets_yaml():
+    try:
+        from ament_index_python.packages import get_package_share_directory
+        return os.path.join(
+            get_package_share_directory('scm_gui'), 'config', 'impedance_presets.yaml')
+    except Exception:
+        pass
+    return os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        'config', 'impedance_presets.yaml')
+
+_IMPEDANCE_PRESETS_YAML = _get_impedance_presets_yaml()
+
+
+def _load_impedance_presets() -> dict:
+    if yaml is None:
+        return {}
+    if os.path.exists(_IMPEDANCE_PRESETS_YAML):
+        try:
+            with open(_IMPEDANCE_PRESETS_YAML) as f:
+                data = yaml.safe_load(f)
+            return data.get('impedance_presets', {}) if data else {}
+        except Exception:
+            pass
+    return {}
+
+
+def _save_impedance_presets(presets: dict):
+    if yaml is None:
+        return
+    with open(_IMPEDANCE_PRESETS_YAML, 'w') as f:
+        yaml.safe_dump({'impedance_presets': presets},
+                       f, default_flow_style=False, allow_unicode=True)
+
+
 def _load_named_poses():
     if yaml is None:
         return {}, 'ready', 'a'
@@ -154,6 +190,9 @@ class ScmGuiNode(Node):
         self._cli_ctrl_mode    = self.create_client(SetControlMode,      '/rby1/ctrl/mode')
         self._cli_move_joint   = self.create_client(MoveToJointPosition, '/rby1/move_to_joint_position')
         self._cli_set_param    = self.create_client(SetParameters,        '/rby1_core_node/set_parameters')
+        self._cli_set_ci_limits = self.create_client(SetCartesianJointLimits, '/rby1/set_cartesian_joint_limits')
+        self._cli_set_ns_weight = self.create_client(SetNullspaceWeight,       '/rby1/set_nullspace_weight')
+        self._cli_set_ns_ref    = self.create_client(SetNullspaceJointRef,     '/rby1/set_nullspace_joint_ref')
 
         # Service clients — vive_rby1
         self._cli_teleop_start  = self.create_client(Trigger,       '/vive_rby1/teleop_start')
@@ -359,6 +398,26 @@ class ScmGuiNode(Node):
     def call_toggle_episode(self, done_cb):
         self.call_trigger(self._cli_toggle_ep, done_cb)
 
+    def call_set_ci_limits(self, joint_names: list, min_rads: list,
+                           max_rads: list, done_cb=None):
+        req = SetCartesianJointLimits.Request()
+        req.joint_names = list(joint_names)
+        req.min_rad = [float(v) for v in min_rads]
+        req.max_rad = [float(v) for v in max_rads]
+        self._call_async(self._cli_set_ci_limits, req, done_cb)
+
+    def call_set_ns_weight(self, joint_names: list, weights: list, done_cb=None):
+        req = SetNullspaceWeight.Request()
+        req.joint_names = list(joint_names)
+        req.weights = [float(v) for v in weights]
+        self._call_async(self._cli_set_ns_weight, req, done_cb)
+
+    def call_set_nullspace_joint_ref(self, positions: list, names: list, done_cb=None):
+        req = SetNullspaceJointRef.Request()
+        req.target.name = list(names)
+        req.target.position = [float(v) for v in positions]
+        self._call_async(self._cli_set_ns_ref, req, done_cb)
+
 
 # ---------------------------------------------------------------------------
 # Qt signals bridge
@@ -420,6 +479,7 @@ class TeleopGuiWindow(QWidget):
 
         # Load named poses and persisted settings
         self._named_poses, self._current_teleop_pose, self._current_robot_model = _load_named_poses()
+        self._imp_presets = _load_impedance_presets()
 
         signals.pedal_updated.connect(self._on_pedal)
         signals.node_status_updated.connect(self._on_nodes)
@@ -449,8 +509,9 @@ class TeleopGuiWindow(QWidget):
         root = QVBoxLayout()
         root.setSpacing(6)
         root.addWidget(self._build_rby1_group())
-        root.addWidget(self._build_joint_position_group())
         root.addWidget(self._build_node_indicators_group())
+        root.addWidget(self._build_joint_position_group())
+        root.addWidget(self._build_cartesian_impedance_group())
         root.addWidget(self._build_teleop_group())
         self.setLayout(root)
 
@@ -739,22 +800,13 @@ class TeleopGuiWindow(QWidget):
             'joint_names': list(BODY_JOINT_NAMES),
             'positions': positions,
         }
-        _save_named_poses(self._named_poses, self._cmb_teleop_pose.currentText(), self._current_robot_model)
-        # Update dropdowns
-        for cmb in (self._cmb_preset, self._cmb_teleop_pose):
-            if cmb.findText(name) < 0:
-                cmb.addItem(name)
+        _save_named_poses(self._named_poses, self._current_teleop_pose, self._current_robot_model)
+        if self._cmb_preset.findText(name) < 0:
+            self._cmb_preset.addItem(name)
+        if self._cmb_ns_ref.findText(name) < 0:
+            self._cmb_ns_ref.addItem(name)
         self._cmb_preset.setCurrentText(name)
         self._le_preset_name.clear()
-
-    def _on_teleop_pose_changed(self, name: str):
-        if name not in self._named_poses:
-            return
-        self._current_teleop_pose = name
-        _save_named_poses(self._named_poses, name, self._current_robot_model)
-        pose = self._named_poses[name]
-        self._node.call_set_teleop_pose(
-            pose.get('positions', []), pose.get('joint_names', []))
 
     def _on_load_current_joints(self):
         self._btn_load_current.setEnabled(False)
@@ -773,6 +825,327 @@ class TeleopGuiWindow(QWidget):
         self._cmb_preset.setCurrentIndex(-1)
         self._btn_load_current.setEnabled(True)
         self._btn_load_current.setText('↓ Load Current Pos')
+
+    # ── Cartesian Impedance Params group ──────────────────────────────────
+
+    def _build_cartesian_impedance_group(self) -> QGroupBox:
+        group = QGroupBox('Cartesian Impedance Params')
+        top_layout = QVBoxLayout()
+        top_layout.setSpacing(4)
+        self._filling_imp_preset = False
+
+        # ── Preset row ────────────────────────────────────────────────────
+        preset_row = QHBoxLayout()
+        self._cmb_imp_preset = QComboBox()
+        self._cmb_imp_preset.setMinimumWidth(130)
+        for name in self._imp_presets:
+            self._cmb_imp_preset.addItem(name)
+        btn_load_imp = _make_btn('Load', '#455A64', height=28)
+        btn_load_imp.clicked.connect(
+            lambda: self._fill_imp_preset(self._cmb_imp_preset.currentText()))
+        self._le_imp_preset_name = QLineEdit()
+        self._le_imp_preset_name.setPlaceholderText('preset name')
+        self._le_imp_preset_name.setFixedWidth(110)
+        btn_save_imp = _make_btn('Save', '#546E7A', height=28)
+        btn_save_imp.clicked.connect(self._on_save_imp_preset)
+        preset_row.addWidget(QLabel('Preset:'))
+        preset_row.addWidget(self._cmb_imp_preset)
+        preset_row.addWidget(btn_load_imp)
+        preset_row.addSpacing(20)
+        preset_row.addWidget(QLabel('Save as:'))
+        preset_row.addWidget(self._le_imp_preset_name)
+        preset_row.addWidget(btn_save_imp)
+        preset_row.addStretch()
+        top_layout.addLayout(preset_row)
+
+        # ── Main two-column area ──────────────────────────────────────────
+        cols = QHBoxLayout()
+        cols.setSpacing(16)
+
+        # Left: Joint Limits (dynamic rows)
+        jl_vbox = QVBoxLayout()
+        jl_vbox.setSpacing(3)
+        jl_hdr_row = QHBoxLayout()
+        jl_hdr_lbl = QLabel('Joint Limits')
+        jl_hdr_lbl.setFont(QFont('Monospace', 9))
+        jl_hdr_lbl.setStyleSheet(
+            'background-color: #37474F; color: white; padding: 2px; border-radius: 3px;')
+        jl_hdr_lbl.setAlignment(Qt.AlignCenter)
+        btn_add_jl = _make_btn('+ Add Joint', '#1565C0', height=26)
+        btn_add_jl.clicked.connect(lambda: self._on_add_jl_row())
+        jl_hdr_row.addWidget(jl_hdr_lbl)
+        jl_hdr_row.addStretch()
+        jl_hdr_row.addWidget(btn_add_jl)
+        jl_vbox.addLayout(jl_hdr_row)
+
+        # Column headers — QWidget wrapper mirrors row_widget structure exactly
+        col_hdr_widget = QWidget()
+        col_hdr = QHBoxLayout(col_hdr_widget)
+        col_hdr.setContentsMargins(0, 1, 0, 1)
+        col_hdr.setSpacing(4)
+        for txt, w in [('Joint', 120), ('Min (rad)', 80), ('Max (rad)', 80), ('', 30)]:
+            lbl = QLabel(txt)
+            lbl.setFont(QFont('Monospace', 8))
+            lbl.setFixedWidth(w)
+            col_hdr.addWidget(lbl)
+        jl_vbox.addWidget(col_hdr_widget)
+
+        # Scroll area for dynamic rows
+        self._jl_container = QWidget()
+        self._jl_container_layout = QVBoxLayout(self._jl_container)
+        self._jl_container_layout.setSpacing(2)
+        self._jl_container_layout.setContentsMargins(0, 0, 0, 0)
+        self._jl_container_layout.addStretch()
+        self._jl_rows = []
+        scroll = QScrollArea()
+        scroll.setWidget(self._jl_container)
+        scroll.setWidgetResizable(True)
+        scroll.setMinimumHeight(140)
+        scroll.setMaximumHeight(200)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setStyleSheet('QScrollArea { border: none; }')
+        jl_vbox.addWidget(scroll)
+
+        cols.addLayout(jl_vbox, stretch=3)
+
+        # Right: Nullspace Weights (fixed 14 rows)
+        ns_vbox = QVBoxLayout()
+        ns_vbox.setSpacing(3)
+        ns_hdr = QLabel('Nullspace Weights')
+        ns_hdr.setFont(QFont('Monospace', 9))
+        ns_hdr.setStyleSheet(
+            'background-color: #37474F; color: white; padding: 2px; border-radius: 3px;')
+        ns_hdr.setAlignment(Qt.AlignCenter)
+        ns_vbox.addWidget(ns_hdr)
+
+        self._ns_weight_spins = {}
+        ns_grid = QGridLayout()
+        ns_grid.setSpacing(3)
+        ns_grid.addWidget(QLabel('Right Arm'), 0, 0, 1, 2)
+        ns_grid.addWidget(QLabel('Left Arm'),  0, 3, 1, 2)
+        for i in range(7):
+            r_name = f'right_arm_{i}'
+            l_name = f'left_arm_{i}'
+            ns_grid.addWidget(QLabel(f'arm_{i}'), i + 1, 0)
+            r_spin = QDoubleSpinBox()
+            r_spin.setRange(0.0, 5.0)
+            r_spin.setDecimals(3)
+            r_spin.setSingleStep(0.01)
+            r_spin.setFixedWidth(72)
+            r_spin.setValue(0.05)
+            r_spin.valueChanged.connect(self._on_imp_param_changed)
+            ns_grid.addWidget(r_spin, i + 1, 1)
+            ns_grid.addWidget(QLabel(f'arm_{i}'), i + 1, 3)
+            l_spin = QDoubleSpinBox()
+            l_spin.setRange(0.0, 5.0)
+            l_spin.setDecimals(3)
+            l_spin.setSingleStep(0.01)
+            l_spin.setFixedWidth(72)
+            l_spin.setValue(0.05)
+            l_spin.valueChanged.connect(self._on_imp_param_changed)
+            ns_grid.addWidget(l_spin, i + 1, 4)
+            self._ns_weight_spins[r_name] = r_spin
+            self._ns_weight_spins[l_name] = l_spin
+        ns_vbox.addLayout(ns_grid)
+        btn_apply_ns = self._make_btn_with_fb(
+            'Apply Weights', '#1565C0',
+            lambda cb: self._on_apply_ns_weights(cb), height=28)
+        ns_vbox.addStretch()
+        cols.addLayout(ns_vbox, stretch=2)
+
+        # ── 3rd column: Nullspace Ref Pose ───────────────────────────────────
+        ns_ref_vbox = QVBoxLayout()
+        ns_ref_vbox.setSpacing(3)
+        ns_ref_hdr = QLabel('Nullspace Ref Pose')
+        ns_ref_hdr.setFont(QFont('Monospace', 9))
+        ns_ref_hdr.setStyleSheet(
+            'background-color: #37474F; color: white; padding: 2px; border-radius: 3px;')
+        ns_ref_hdr.setAlignment(Qt.AlignCenter)
+        ns_ref_vbox.addWidget(ns_ref_hdr)
+        self._cmb_ns_ref = QComboBox()
+        self._cmb_ns_ref.setMinimumWidth(130)
+        for np_name in self._named_poses:
+            self._cmb_ns_ref.addItem(np_name)
+        if self._current_teleop_pose and self._cmb_ns_ref.findText(self._current_teleop_pose) >= 0:
+            self._cmb_ns_ref.setCurrentText(self._current_teleop_pose)
+        self._cmb_ns_ref.currentTextChanged.connect(self._on_imp_param_changed)
+        ns_ref_vbox.addWidget(self._cmb_ns_ref)
+        btn_apply_ns_ref = self._make_btn_with_fb(
+            'Apply Nullspace Ref', '#1565C0',
+            lambda cb: self._on_apply_ns_ref(cb), height=28)
+        ns_ref_vbox.addStretch()
+        cols.addLayout(ns_ref_vbox, stretch=1)
+
+        top_layout.addLayout(cols)
+
+        # ── Apply buttons — 동일 수평선 ──────────────────────────────────────
+        apply_row = QHBoxLayout()
+        apply_row.setSpacing(16)
+        apply_left = QHBoxLayout()
+        apply_left.addStretch()
+        btn_apply_jl = self._make_btn_with_fb(
+            'Apply Joint Limits', '#1565C0',
+            lambda cb: self._on_apply_jl(cb), height=28)
+        apply_left.addWidget(btn_apply_jl)
+        apply_mid = QHBoxLayout()
+        apply_mid.addStretch()
+        btn_apply_ns = self._make_btn_with_fb(
+            'Apply Weights', '#1565C0',
+            lambda cb: self._on_apply_ns_weights(cb), height=28)
+        apply_mid.addWidget(btn_apply_ns)
+        apply_right = QHBoxLayout()
+        apply_right.addStretch()
+        btn_apply_ns_ref = self._make_btn_with_fb(
+            'Apply Nullspace Ref', '#1565C0',
+            lambda cb: self._on_apply_ns_ref(cb), height=28)
+        apply_right.addWidget(btn_apply_ns_ref)
+        apply_row.addLayout(apply_left,  stretch=3)
+        apply_row.addLayout(apply_mid,   stretch=2)
+        apply_row.addLayout(apply_right, stretch=1)
+        top_layout.addLayout(apply_row)
+
+        group.setLayout(top_layout)
+
+        # Load default preset if available
+        if 'default' in self._imp_presets:
+            self._fill_imp_preset('default')
+            self._cmb_imp_preset.setCurrentText('default')
+
+        return group
+
+    def _on_add_jl_row(self, joint_name=None, min_val=0.0, max_val=1.0):
+        row_widget = QWidget()
+        row_layout = QHBoxLayout(row_widget)
+        row_layout.setContentsMargins(0, 1, 0, 1)
+        row_layout.setSpacing(4)
+
+        combo = QComboBox()
+        combo.addItems(BODY_JOINT_NAMES)
+        combo.setFixedWidth(120)
+        if joint_name and joint_name in BODY_JOINT_NAMES:
+            combo.setCurrentText(joint_name)
+
+        spin_min = QDoubleSpinBox()
+        spin_min.setRange(-6.28, 6.28)
+        spin_min.setDecimals(3)
+        spin_min.setSingleStep(0.01)
+        spin_min.setFixedWidth(80)
+        spin_min.setValue(min_val)
+
+        spin_max = QDoubleSpinBox()
+        spin_max.setRange(-6.28, 6.28)
+        spin_max.setDecimals(3)
+        spin_max.setSingleStep(0.01)
+        spin_max.setFixedWidth(80)
+        spin_max.setValue(max_val)
+
+        btn_rm = _make_btn('X', '#B71C1C', height=24)
+        btn_rm.setFixedWidth(30)
+
+        combo.currentTextChanged.connect(self._on_imp_param_changed)
+        spin_min.valueChanged.connect(self._on_imp_param_changed)
+        spin_max.valueChanged.connect(self._on_imp_param_changed)
+
+        row_layout.addWidget(combo)
+        row_layout.addWidget(spin_min)
+        row_layout.addWidget(spin_max)
+        row_layout.addWidget(btn_rm)
+
+        row_data = {'combo': combo, 'min': spin_min, 'max': spin_max, 'widget': row_widget}
+        self._jl_rows.append(row_data)
+        btn_rm.clicked.connect(lambda: self._on_remove_jl_row(row_data))
+
+        # Insert before the stretch item
+        idx = self._jl_container_layout.count() - 1
+        self._jl_container_layout.insertWidget(idx, row_widget)
+        self._on_imp_param_changed()
+
+    def _on_remove_jl_row(self, row_data: dict):
+        row_data['widget'].setParent(None)
+        row_data['widget'].deleteLater()
+        if row_data in self._jl_rows:
+            self._jl_rows.remove(row_data)
+        self._on_imp_param_changed()
+
+    def _on_apply_jl(self, done_cb=None):
+        names = [r['combo'].currentText() for r in self._jl_rows]
+        mins  = [r['min'].value()         for r in self._jl_rows]
+        maxs  = [r['max'].value()         for r in self._jl_rows]
+        self._node.call_set_ci_limits(names, mins, maxs, done_cb)
+
+    def _on_apply_ns_weights(self, done_cb=None):
+        names   = list(self._ns_weight_spins.keys())
+        weights = [self._ns_weight_spins[n].value() for n in names]
+        self._node.call_set_ns_weight(names, weights, done_cb)
+
+    def _fill_imp_preset(self, name: str):
+        preset = self._imp_presets.get(name)
+        if not preset:
+            return
+        self._filling_imp_preset = True
+        try:
+            # Clear all existing joint limit rows
+            for row in list(self._jl_rows):
+                self._on_remove_jl_row(row)
+            # Re-populate from preset
+            for jl in preset.get('joint_limits', []):
+                self._on_add_jl_row(jl.get('name'), jl.get('min', 0.0), jl.get('max', 1.0))
+            # Fill nullspace weights
+            weights = preset.get('nullspace_weights', {})
+            r_weights = weights.get('right_arm', [0.05] * 7)
+            l_weights = weights.get('left_arm',  [0.05] * 7)
+            for i in range(7):
+                r_val = r_weights[i] if i < len(r_weights) else 0.05
+                l_val = l_weights[i] if i < len(l_weights) else 0.05
+                self._ns_weight_spins[f'right_arm_{i}'].setValue(r_val)
+                self._ns_weight_spins[f'left_arm_{i}'].setValue(l_val)
+            # Set nullspace ref dropdown
+            ns_ref = preset.get('nullspace_ref', '')
+            if ns_ref and self._cmb_ns_ref.findText(ns_ref) >= 0:
+                self._cmb_ns_ref.setCurrentText(ns_ref)
+        finally:
+            self._filling_imp_preset = False
+
+    def _on_save_imp_preset(self):
+        name = self._le_imp_preset_name.text().strip()
+        if not name:
+            return
+        r_weights = [self._ns_weight_spins[f'right_arm_{i}'].value() for i in range(7)]
+        l_weights = [self._ns_weight_spins[f'left_arm_{i}'].value()  for i in range(7)]
+        self._imp_presets[name] = {
+            'joint_limits': [
+                {'name': r['combo'].currentText(),
+                 'min':  round(r['min'].value(), 4),
+                 'max':  round(r['max'].value(), 4)}
+                for r in self._jl_rows
+            ],
+            'nullspace_weights': {
+                'right_arm': [round(v, 4) for v in r_weights],
+                'left_arm':  [round(v, 4) for v in l_weights],
+            },
+            'nullspace_ref': self._cmb_ns_ref.currentText(),
+        }
+        _save_impedance_presets(self._imp_presets)
+        if self._cmb_imp_preset.findText(name) < 0:
+            self._cmb_imp_preset.addItem(name)
+        self._cmb_imp_preset.setCurrentText(name)
+        self._le_imp_preset_name.clear()
+
+    def _on_imp_param_changed(self, *_):
+        if not self._filling_imp_preset:
+            self._cmb_imp_preset.setCurrentIndex(-1)
+
+    def _on_apply_ns_ref(self, done_cb=None):
+        name = self._cmb_ns_ref.currentText()
+        if name not in self._named_poses:
+            if done_cb:
+                done_cb(False, 'no pose selected')
+            return
+        pose = self._named_poses[name]
+        positions = pose.get('positions', [])
+        jnt_names = pose.get('joint_names', [])
+        self._node.call_set_teleop_pose(positions, jnt_names)
+        self._node.call_set_nullspace_joint_ref(positions, jnt_names, done_cb)
 
     # ── Node Indicators group ─────────────────────────────────────────────
 
@@ -949,20 +1322,6 @@ class TeleopGuiWindow(QWidget):
         mirror_row.addWidget(self._rb_track_mirror)
         mirror_row.addStretch()
         vbox.addLayout(mirror_row)
-
-        vbox.addSpacing(4)
-        pose_row = QHBoxLayout()
-        pose_row.addWidget(QLabel('Teleop Pose:'))
-        self._cmb_teleop_pose = QComboBox()
-        self._cmb_teleop_pose.setMinimumWidth(140)
-        for name in self._named_poses:
-            self._cmb_teleop_pose.addItem(name)
-        if self._current_teleop_pose in self._named_poses:
-            self._cmb_teleop_pose.setCurrentText(self._current_teleop_pose)
-        self._cmb_teleop_pose.currentTextChanged.connect(self._on_teleop_pose_changed)
-        pose_row.addWidget(self._cmb_teleop_pose)
-        pose_row.addStretch()
-        vbox.addLayout(pose_row)
 
         vbox.addStretch()
         group.setLayout(vbox)

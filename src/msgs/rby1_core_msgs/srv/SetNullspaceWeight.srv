@@ -1,0 +1,8 @@
+# Partial update of CartesianImpedance nullspace weights.
+# Only the listed joints are updated; others retain their current value.
+# Supported joints: right_arm_0~6, left_arm_0~6.
+string[] joint_names
+float64[] weights
+---
+bool success
+string message

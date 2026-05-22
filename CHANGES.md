@@ -1,6 +1,42 @@
 # CHANGES
 
+## 2026-05-22 (3)
+
+### GUI — Impedance Preset에 Nullspace Ref Pose 통합, Teleop Pose dropdown 제거
+
+- **Teleop Pose dropdown 제거**: Teleop 섹션의 "Teleop Pose:" dropdown 삭제. teleop pose는 Impedance Preset을 통해 설정.
+- **Cartesian Impedance Params — Nullspace Ref Pose 행 추가**: 두 컬럼(Joint Limits, Nullspace Weights) 아래에 `Nullspace Ref Pose:` dropdown + `[Apply Nullspace Ref]` 버튼 추가.
+  - dropdown 후보: joint position preset 목록(`named_poses.yaml`)에서 동적으로 채워짐.
+  - Joint Position preset 신규 저장 시 Nullspace Ref dropdown에도 자동 추가.
+  - `[Apply Nullspace Ref]`: 선택된 joint position preset의 값을 두 서비스에 동시 전송 — `/vive_rby1/set_teleop_pose`(teleop start/stop 이동 자세) + `/rby1/set_nullspace_joint_ref`(CartesianImpedance nullspace_ref_rad 즉시 적용). `named_poses.yaml` 수정 없음.
+- **Impedance preset 구조 확장**: `nullspace_ref` 필드(joint position preset 이름) 추가. Load 시 세 값 모두 복원, Save 시 함께 저장.
+- **Dirty 상태 추적**: joint limits 행 추가/제거/값변경, nullspace weight 변경, nullspace_ref dropdown 변경 시 impedance preset combobox 자동 blank.
+- **ScmGuiNode**: `SetNullspaceJointRef` import + `_cli_set_ns_ref` 클라이언트 + `call_set_nullspace_joint_ref()` 메서드 추가.
+- `config/impedance_presets.yaml`: default preset에 `nullspace_ref: ''` 필드 추가.
+
+## 2026-05-22 (2)
+
+### GUI — Cartesian Impedance Params 섹션 추가
+
+- **신규 GUI 섹션 "Cartesian Impedance Params"**: Joint Position 섹션 아래에 추가.
+  - **Joint Limits 테이블**: `[+ Add Joint]` 으로 행 추가, 드롭다운에서 body joint 선택(torso_0~5, right/left_arm_0~6), min/max spinbox, `[X]` 삭제. `[Apply Joint Limits]` 로 `/rby1/set_cartesian_joint_limits` 서비스 호출.
+  - **Nullspace Weights 테이블**: right/left arm 0~6 각 14개 spinbox 고정. `[Apply Weights]` 로 `/rby1/set_nullspace_weight` 서비스 호출.
+  - **Preset 저장/불러오기**: `impedance_presets.yaml`에 저장. 동일 이름 저장 시 overwrite. 기본 preset `default` 포함.
+- `setup.py`: `impedance_presets.yaml` install 경로 추가.
+
 ## 2026-05-22
+
+### torso(body tracker) teleop 개선 — on/off 토글, 헬스 표시, 늦은 재캡처, launch 파라미터 복원
+
+- **배경:** `teleop-branch`(다른 개발자, 구 인터페이스)와 전체 코드 비교 결과, torso teleop 기능(body tracker → `link_torso_5` CartesianImpedance)은 **우리 코드에 이미 완비**되어 있었음(공통 조상 커밋 `3f45202`/hw-core `738c97c`에서 개발, 우리 리팩터가 name-keyed `LinkPoseCommand` + YAML 파라미터화로 유지·개선). 따라서 포팅이 아니라 **양쪽 코드 모두에 없던 개선점 4건**을 추가함. 변경은 teleop 단독, hw-core 변경 없음.
+- `core/vive_rby1/src/vive_rby1_node.cpp`:
+  - **torso on/off 토글:** `use_torso` 파라미터(기본 true) + `/teleop/use_torso`(`std_msgs/Bool`) 런타임 구독(`onUseTorso`) 추가. 기존 `mirror_mode`(`/teleop/mirror_mode`) 패턴을 그대로 따름. off 전환 시 `ref_body_`/`torso5_0_` reset(→ teleop가 `link_torso_5` 전송 중단 → hw-core가 마지막 torso 포즈 유지/freeze), on 재전환 시 engage 중이면 현재 torso 포즈 기준으로 재캡처. engage 캡처(`engage()`)와 스트림 전송 블록 모두 `use_torso_` 게이트 추가.
+  - **늦은 body tracker 재캡처:** `onTrackerBody`에서 `engaged_ && use_torso_ && !ref_body_`이면 처음 들어온 시점에 `ref_body_`/`torso5_0_` 캡처. engage 시점에 body tracker가 없던 경우에도 재engage 없이 torso가 부드럽게 합류.
+  - **body tracker 헬스 표시:** `onTimer`의 `/teleop/tracker_status` 문자열에 body tracker 수신 이력이 있을 때만 `B:OK/JITTER/LOST` 추가(`trackerStatus()` 재사용). 미설치 시 상시 `B:LOST` 노이즈 방지.
+  - include `std_msgs/msg/bool.hpp`, 멤버 `sub_use_torso_`/`use_torso_` 추가.
+- `teleop_bringup/launch/teleop.launch.py`: `vive_rby1_node` 파라미터에 `torso_pos_scale: 1.0`(우리 launch에서 누락되어 노드 기본값 의존하던 것 복원), `use_torso: True` 추가.
+- `core/vive_rby1/config/vive_rby1.yaml`: `torso_pos_scale`, `use_torso` 항목 문서화(주석 포함). 단, 해당 yaml은 stale하며 실제 권위는 launch dict.
+- 검증: ROS 미설치 본(WSL) 환경 → colcon 빌드 미수행(빌드는 Docker/`docker/Dockerfile.teleop`). launch는 `python3 -m py_compile` 통과. 사용자 ROS2 환경에서 `cd teleop && colcon build --packages-select vive_rby1` 필요. 런타임: `ros2 param get /vive_rby1_node use_torso`, body tracker 가동 시 `/teleop/tracker_status`에 `B:` 표시, `ros2 topic pub -1 /teleop/use_torso std_msgs/Bool "{data: false}"` 후 `/rby1/cmd/pose`에서 `link_torso_5` 사라짐/`true`로 복귀 확인.
 
 ### scm_gui: /rby1/state/status 파싱을 bool/has_gripper 로 갱신
 

@@ -114,6 +114,8 @@ def generate_launch_description():
                 'publish_rate':       100.0,
                 'ik_dt':              0.05,
                 'pos_scale':          0.5,
+                'torso_pos_scale':    1.0,
+                'use_torso':          True,
                 'sdk_max_delta_pos':  0.03,
             }],
         ),

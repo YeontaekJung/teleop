@@ -44,6 +44,7 @@
 #include "scm_recording_msgs/srv/toggle_pause.hpp"
 #include "sensor_msgs/msg/joy.hpp"
 #include "sensor_msgs/msg/joint_state.hpp"
+#include "std_msgs/msg/bool.hpp"
 #include "std_msgs/msg/int32.hpp"
 #include "std_msgs/msg/string.hpp"
 #include "std_srvs/srv/trigger.hpp"
@@ -260,6 +261,7 @@ class ViveRby1Node : public rclcpp::Node {
     declare_parameter("topic_joint_state", "/rby1/state/joint");
     declare_parameter("pos_scale", 1.0);
     declare_parameter("torso_pos_scale", 1.0);
+    declare_parameter("use_torso", true);
     declare_parameter("ik_dt", 0.05);
     declare_parameter("publish_rate", 20.0);
     declare_parameter("sdk_max_delta_pos", 0.03);
@@ -279,6 +281,7 @@ class ViveRby1Node : public rclcpp::Node {
 
     pos_scale_ = get_parameter("pos_scale").as_double();
     torso_pos_scale_ = get_parameter("torso_pos_scale").as_double();
+    use_torso_ = get_parameter("use_torso").as_bool();
     ik_dt_ = get_parameter("ik_dt").as_double();
     publish_rate_ = get_parameter("publish_rate").as_double();
     sdk_max_delta_pos_ = get_parameter("sdk_max_delta_pos").as_double();
@@ -309,6 +312,8 @@ class ViveRby1Node : public rclcpp::Node {
       });
     sub_mirror_mode_ = create_subscription<std_msgs::msg::String>(
       "/teleop/mirror_mode", 10, std::bind(&ViveRby1Node::onMirrorMode, this, std::placeholders::_1));
+    sub_use_torso_ = create_subscription<std_msgs::msg::Bool>(
+      "/teleop/use_torso", 10, std::bind(&ViveRby1Node::onUseTorso, this, std::placeholders::_1));
 
     pub_pose_cmd_ = create_publisher<rby1_core_msgs::msg::LinkPoseCommand>("/rby1/cmd/pose", stream_qos);
     // ── EE Pose → warmup hold ──────────────────────────────────────────
@@ -402,6 +407,12 @@ class ViveRby1Node : public rclcpp::Node {
       tracker_b_.buf.pop_front();
     }
     tracker_b_.smoothed = smoothTracker(tracker_b_.smoothed, *msg);
+    // Body tracker came online after engage: capture reference now so torso
+    // joins smoothly instead of staying disabled until the next re-engage.
+    if (engaged_ && use_torso_ && !ref_body_ && tracker_b_.smoothed) {
+      ref_body_ = tracker_b_.smoothed;
+      torso5_0_ = ik_solver_->framePlacement("link_torso_5");
+    }
   }
 
   void onJointState(const sensor_msgs::msg::JointState::SharedPtr msg) {
@@ -417,6 +428,23 @@ class ViveRby1Node : public rclcpp::Node {
       ref_r_ = tracker_r_.smoothed;
       ee_l_0_ = ik_solver_->framePlacement("tracker_left");
       ee_r_0_ = ik_solver_->framePlacement("tracker_right");
+    }
+  }
+
+  void onUseTorso(const std_msgs::msg::Bool::SharedPtr msg) {
+    if (msg->data == use_torso_) {
+      return;
+    }
+    use_torso_ = msg->data;
+    RCLCPP_INFO(get_logger(), "[vive_rby1] use_torso -- %s", use_torso_ ? "true" : "false");
+    if (!use_torso_) {
+      // Stop sending link_torso_5: hw-core holds the torso at its last pose.
+      ref_body_.reset();
+      torso5_0_.reset();
+    } else if (engaged_ && tracker_b_.smoothed) {
+      // Re-enabled mid-stream: recapture reference from the current torso pose.
+      ref_body_ = tracker_b_.smoothed;
+      torso5_0_ = ik_solver_->framePlacement("link_torso_5");
     }
   }
 
@@ -468,7 +496,7 @@ class ViveRby1Node : public rclcpp::Node {
     ee_r_0_ = ik_solver_->framePlacement("tracker_right");
     sdk_ee_l_0_ = ik_solver_->framePlacement("ee_left");
     sdk_ee_r_0_ = ik_solver_->framePlacement("ee_right");
-    if (tracker_b_.smoothed) {
+    if (use_torso_ && tracker_b_.smoothed) {
       ref_body_   = tracker_b_.smoothed;
       torso5_0_   = ik_solver_->framePlacement("link_torso_5");
     }
@@ -848,6 +876,9 @@ class ViveRby1Node : public rclcpp::Node {
   void onTimer() {
     std_msgs::msg::String tracker_msg;
     tracker_msg.data = "L:" + trackerStatus(tracker_l_) + " R:" + trackerStatus(tracker_r_);
+    if (tracker_b_.raw) {
+      tracker_msg.data += " B:" + trackerStatus(tracker_b_);
+    }
     pub_tracker_status_->publish(tracker_msg);
 
     if (warmup_ticks_ > 0) {
@@ -922,7 +953,7 @@ class ViveRby1Node : public rclcpp::Node {
     msg.link_names = {"ee_right", "ee_left"};
     msg.poses.push_back(se3ToPose(*sdk_r));
     msg.poses.push_back(se3ToPose(*sdk_l));
-    if (ref_body_ && torso5_0_ && tracker_b_.smoothed) {
+    if (use_torso_ && ref_body_ && torso5_0_ && tracker_b_.smoothed) {
       Eigen::Vector3d delta_b = v2r_R_ * (tracker_b_.smoothed->translation() - ref_body_->translation());
       const Eigen::Matrix3d dR_b = tracker_b_.smoothed->rotation() * ref_body_->rotation().transpose();
       Eigen::Matrix3d dR_b_robot = v2r_R_ * dR_b * v2r_R_.transpose();
@@ -953,6 +984,7 @@ class ViveRby1Node : public rclcpp::Node {
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr sub_joint_state_;
   rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr sub_task_id_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr sub_mirror_mode_;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr sub_use_torso_;
   rclcpp::Subscription<geometry_msgs::msg::PoseArray>::SharedPtr sub_ee_pose_;
 
   rclcpp::Publisher<rby1_core_msgs::msg::LinkPoseCommand>::SharedPtr pub_pose_cmd_;
@@ -1019,6 +1051,7 @@ class ViveRby1Node : public rclcpp::Node {
 
   double pos_scale_{1.0};
   double torso_pos_scale_{1.0};
+  bool use_torso_{true};
   double ik_dt_{0.05};
   double publish_rate_{20.0};
   double sdk_max_delta_pos_{0.03};

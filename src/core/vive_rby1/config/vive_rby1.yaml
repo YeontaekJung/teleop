@@ -10,6 +10,10 @@ vive_rby1_node:
     topic_teleop_command: "/rby1_teleop_command"
 
     pos_scale: 1.0
+    # body tracker → torso position scale (applied to the torso delta)
+    torso_pos_scale: 1.0
+    # enable torso (body tracker) teleop; runtime toggle via /teleop/use_torso (std_msgs/Bool)
+    use_torso: true
     ik_dt: 0.05
     publish_rate: 100.0
     sdk_max_delta_pos: 0.03
