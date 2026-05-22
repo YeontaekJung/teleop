@@ -1,0 +1,4 @@
+sensor_msgs/JointState target
+---
+bool success
+string message

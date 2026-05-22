@@ -36,6 +36,7 @@
 #include "ament_index_cpp/get_package_share_directory.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rby1_core_msgs/srv/move_to_joint_position.hpp"
+#include "rby1_core_msgs/srv/set_nullspace_joint_ref.hpp"
 #include "rby1_core_msgs/srv/set_stream.hpp"
 #include "scm_recording_msgs/srv/end_recording.hpp"
 #include "scm_recording_msgs/srv/set_tele_op_pose.hpp"
@@ -244,6 +245,7 @@ class ViveRby1Node : public rclcpp::Node {
   using MoveToJointPosition = rby1_core_msgs::srv::MoveToJointPosition;
   using SetStream = rby1_core_msgs::srv::SetStream;
   using SetTeleOpPose = scm_recording_msgs::srv::SetTeleOpPose;
+  using SetNullspaceJointRef = rby1_core_msgs::srv::SetNullspaceJointRef;
 
   ViveRby1Node()
   : Node("vive_rby1_node"),
@@ -265,7 +267,7 @@ class ViveRby1Node : public rclcpp::Node {
     declare_parameter("pedal_engage_index", 0);
     declare_parameter("pedal_discard_index", 1);
     declare_parameter("pedal_episode_index", 2);
-    declare_parameter("tracker_smooth_alpha", 0.5);
+    declare_parameter("tracker_smooth_alpha", 0.9);
 
     const auto urdf_path = get_parameter("urdf_path").as_string();
     const auto srdf_path = get_parameter("srdf_path").as_string();
@@ -325,6 +327,7 @@ class ViveRby1Node : public rclcpp::Node {
     cli_set_mode_ = create_client<SetControlMode>("/rby1/ctrl/mode");
     cli_stream_ = create_client<SetStream>("/rby1/stream");
     cli_move_joint_ = create_client<MoveToJointPosition>("/rby1/move_to_joint_position");
+    cli_nullspace_joint_ref_ = create_client<SetNullspaceJointRef>("/rby1/set_nullspace_joint_ref");
 
     srv_teleop_start_ = create_service<std_srvs::srv::Trigger>(
       "/vive_rby1/teleop_start",
@@ -637,6 +640,12 @@ class ViveRby1Node : public rclcpp::Node {
     res->success = true;
     res->message = "teleop pose updated";
     RCLCPP_INFO(get_logger(), "[vive_rby1] teleop_pose updated (%zu joints)", req->pose.name.size());
+    // Propagate arm joints to hw-core nullspace reference so IK stays near the new teleop pose.
+    if (cli_nullspace_joint_ref_->service_is_ready()) {
+      auto nr = std::make_shared<SetNullspaceJointRef::Request>();
+      nr->target = req->pose;
+      cli_nullspace_joint_ref_->async_send_request(nr);
+    }
   }
 
   // ── Teleop start/stop helpers (run in detached threads) ──────────────────
@@ -671,6 +680,18 @@ class ViveRby1Node : public rclcpp::Node {
       return;
     }
     RCLCPP_INFO(get_logger(), "[vive_rby1] doTeleopStart: at teleop pose, starting stream");
+
+    // Re-assert the nullspace reference so it matches the pose we just moved to,
+    // even if the GUI never pushed it (or the service wasn't ready at selection
+    // time). Sent before the stream so the first CartesianImpedance tick uses it.
+    if (cli_nullspace_joint_ref_->service_is_ready()) {
+      auto rn = std::make_shared<SetNullspaceJointRef::Request>();
+      rn->target = teleop_pose_;
+      cli_nullspace_joint_ref_->async_send_request(rn);
+      RCLCPP_INFO(get_logger(), "[vive_rby1] doTeleopStart: nullspace ref set to teleop pose");
+    } else {
+      RCLCPP_WARN(get_logger(), "[vive_rby1] doTeleopStart: nullspace service not ready — skipped");
+    }
 
     // Step 3: Start stream
     warmup_ticks_ = static_cast<int>(publish_rate_);
@@ -946,6 +967,7 @@ class ViveRby1Node : public rclcpp::Node {
   rclcpp::Client<SetControlMode>::SharedPtr cli_set_mode_;
   rclcpp::Client<SetStream>::SharedPtr cli_stream_;
   rclcpp::Client<MoveToJointPosition>::SharedPtr cli_move_joint_;
+  rclcpp::Client<SetNullspaceJointRef>::SharedPtr cli_nullspace_joint_ref_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_teleop_start_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_teleop_stop_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_toggle_clutch_;

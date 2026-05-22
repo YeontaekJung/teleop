@@ -19,6 +19,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/SetControlMode.srv"
   "srv/SetPower.srv"
   "srv/SetServo.srv"
+  "srv/SetNullspaceJointRef.srv"
   "srv/SetStream.srv"
   DEPENDENCIES std_msgs builtin_interfaces geometry_msgs sensor_msgs
 )

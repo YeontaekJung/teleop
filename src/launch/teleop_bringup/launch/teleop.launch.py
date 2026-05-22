@@ -111,7 +111,7 @@ def generate_launch_description():
             parameters=[{
                 'urdf_path':          urdf_path,
                 'srdf_path':          srdf_path,
-                'publish_rate':       20.0,
+                'publish_rate':       100.0,
                 'ik_dt':              0.05,
                 'pos_scale':          0.5,
                 'sdk_max_delta_pos':  0.03,

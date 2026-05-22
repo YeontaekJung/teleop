@@ -1129,10 +1129,10 @@ class TeleopGuiWindow(QWidget):
             spin.setStyleSheet('')
 
     def _on_rby1_status(self, data: dict):
-        power   = data.get('power_state',   'False') == 'True'
-        servo   = data.get('servo_state',   'False') == 'True'
-        stream  = data.get('stream_state',  'False') == 'True'
-        gripper = data.get('gripper_state', 'False') == 'True'
+        power   = bool(data.get('power_state',  False))
+        servo   = bool(data.get('servo_state',  False))
+        stream  = bool(data.get('stream_state', False))
+        gripper = bool(data.get('has_gripper',  False))
         ctrl    = data.get('control_state', '')
         ctr_type = data.get('ctr_type', '')
 
