@@ -54,6 +54,11 @@ BODY_JOINT_NAMES = [
 CORE_NODES = [
     ('rby1_core_node', 'rby1_core'),
 ]
+VISION_NODES = [
+    ('cam_high/camera',       'cam_high'),
+    ('cam_left_wrist/camera', 'cam_left_wrist'),
+    ('cam_right_wrist/camera','cam_right_wrist'),
+]
 TELEOP_NODES = [
     ('pedal_node',           'pedal_ros2'),
     ('vive_tracker_node',    'vive_ros2'),
@@ -64,7 +69,7 @@ TELEOP_NODES = [
 RECORDING_NODES = [
     ('scm_recording', 'recorder'),
 ]
-NODES_TO_WATCH = CORE_NODES + TELEOP_NODES + RECORDING_NODES
+NODES_TO_WATCH = CORE_NODES + VISION_NODES + TELEOP_NODES + RECORDING_NODES
 
 REC_STATE_STYLE = {
     'IDLE':      ('⬤ IDLE',      '#888888'),
@@ -259,7 +264,12 @@ class ScmGuiNode(Node):
         self._next_joint_cb = cb
 
     def _poll_nodes(self):
-        names  = {n for n, _ in self.get_node_names_and_namespaces()}
+        node_info = self.get_node_names_and_namespaces()
+        names = set()
+        for name, ns in node_info:
+            names.add(name)
+            fq = (ns.rstrip('/') + '/' + name).lstrip('/')
+            names.add(fq)
         status = {node: (node in names) for node, _ in NODES_TO_WATCH}
         for cb in self._node_status_cbs:
             cb(status)
@@ -1167,42 +1177,50 @@ class TeleopGuiWindow(QWidget):
 
     def _build_node_indicators_group(self) -> QGroupBox:
         group = QGroupBox('Node Indicators')
-        hbox = QHBoxLayout()
-        hbox.setSpacing(4)
+        vbox = QVBoxLayout()
+        vbox.setSpacing(4)
         self._node_dots = {}
 
-        sections = [
-            ('core',           CORE_NODES,   1),
-            ('vision',         [],           1),
-            ('statemachine',   [],           1),
-            ('motion planning', [],          1),
-            ('driving',        [],           1),
-            ('VLA',            [],           1),
-            ('teleop',         TELEOP_NODES, 2),
-            ('recording',      RECORDING_NODES, 1),
+        rows = [
+            [
+                ('core',            CORE_NODES,      1),
+                ('vision',          VISION_NODES,    2),
+                ('statemachine',    [],              1),
+                ('motion planning', [],              1),
+            ],
+            [
+                ('driving',         [],              1),
+                ('VLA',             [],              1),
+                ('teleop',          TELEOP_NODES,    3),
+                ('recording',       RECORDING_NODES, 1),
+            ],
         ]
 
-        for title, nodes, stretch in sections:
-            sub = QGroupBox(title)
-            sub_vbox = QVBoxLayout()
-            sub_vbox.setSpacing(2)
-            sub_vbox.setContentsMargins(4, 4, 4, 4)
-            for node, pkg in nodes:
-                row = QHBoxLayout()
-                row.setSpacing(3)
-                dot = QLabel('●')
-                dot.setFont(QFont('Monospace', 11))
-                dot.setStyleSheet('color: #888;')
-                row.addWidget(dot)
-                row.addWidget(QLabel(pkg))
-                row.addStretch()
-                sub_vbox.addLayout(row)
-                self._node_dots[node] = dot
-            sub_vbox.addStretch()
-            sub.setLayout(sub_vbox)
-            hbox.addWidget(sub, stretch)
+        for row_sections in rows:
+            hbox = QHBoxLayout()
+            hbox.setSpacing(4)
+            for title, nodes, stretch in row_sections:
+                sub = QGroupBox(title)
+                sub_vbox = QVBoxLayout()
+                sub_vbox.setSpacing(2)
+                sub_vbox.setContentsMargins(4, 4, 4, 4)
+                for node, pkg in nodes:
+                    row = QHBoxLayout()
+                    row.setSpacing(3)
+                    dot = QLabel('●')
+                    dot.setFont(QFont('Monospace', 11))
+                    dot.setStyleSheet('color: #888;')
+                    row.addWidget(dot)
+                    row.addWidget(QLabel(pkg))
+                    row.addStretch()
+                    sub_vbox.addLayout(row)
+                    self._node_dots[node] = dot
+                sub_vbox.addStretch()
+                sub.setLayout(sub_vbox)
+                hbox.addWidget(sub, stretch)
+            vbox.addLayout(hbox)
 
-        group.setLayout(hbox)
+        group.setLayout(vbox)
         return group
 
     # ── Teleop group ───────────────────────────────────────────────────────
