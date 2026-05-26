@@ -71,6 +71,17 @@ RECORDING_NODES = [
 ]
 NODES_TO_WATCH = CORE_NODES + VISION_NODES + TELEOP_NODES + RECORDING_NODES
 
+MODULE_ORDER = [
+    ('core',            CORE_NODES),
+    ('vision',          VISION_NODES),
+    ('statemachine',    []),
+    ('motion planning', []),
+    ('driving',         []),
+    ('VLA',             []),
+    ('teleop',          TELEOP_NODES),
+    ('recording',       RECORDING_NODES),
+]
+
 REC_STATE_STYLE = {
     'IDLE':      ('⬤ IDLE',      '#888888'),
     'ARMING':    ('⬤ ARMING',    '#5555CC'),
@@ -1177,50 +1188,34 @@ class TeleopGuiWindow(QWidget):
 
     def _build_node_indicators_group(self) -> QGroupBox:
         group = QGroupBox('Node Indicators')
-        vbox = QVBoxLayout()
-        vbox.setSpacing(4)
+        grid = QGridLayout()
+        grid.setSpacing(2)
+        grid.setContentsMargins(6, 6, 6, 6)
+        grid.setColumnMinimumWidth(0, 100)
+        grid.setColumnStretch(1, 1)
         self._node_dots = {}
 
-        rows = [
-            [
-                ('core',            CORE_NODES,      1),
-                ('vision',          VISION_NODES,    2),
-                ('statemachine',    [],              1),
-                ('motion planning', [],              1),
-            ],
-            [
-                ('driving',         [],              1),
-                ('VLA',             [],              1),
-                ('teleop',          TELEOP_NODES,    3),
-                ('recording',       RECORDING_NODES, 1),
-            ],
-        ]
+        for grid_row, (title, nodes) in enumerate(MODULE_ORDER):
+            name_lbl = QLabel(title)
+            name_lbl.setStyleSheet('color: #aaa; font-weight: bold;')
+            grid.addWidget(name_lbl, grid_row, 0, Qt.AlignTop | Qt.AlignLeft)
 
-        for row_sections in rows:
-            hbox = QHBoxLayout()
-            hbox.setSpacing(4)
-            for title, nodes, stretch in row_sections:
-                sub = QGroupBox(title)
-                sub_vbox = QVBoxLayout()
-                sub_vbox.setSpacing(2)
-                sub_vbox.setContentsMargins(4, 4, 4, 4)
+            if nodes:
+                flow = QWidget()
+                flow_layout = QHBoxLayout(flow)
+                flow_layout.setSpacing(12)
+                flow_layout.setContentsMargins(8, 0, 0, 0)
                 for node, pkg in nodes:
-                    row = QHBoxLayout()
-                    row.setSpacing(3)
                     dot = QLabel('●')
                     dot.setFont(QFont('Monospace', 11))
                     dot.setStyleSheet('color: #888;')
-                    row.addWidget(dot)
-                    row.addWidget(QLabel(pkg))
-                    row.addStretch()
-                    sub_vbox.addLayout(row)
+                    flow_layout.addWidget(dot)
+                    flow_layout.addWidget(QLabel(pkg))
                     self._node_dots[node] = dot
-                sub_vbox.addStretch()
-                sub.setLayout(sub_vbox)
-                hbox.addWidget(sub, stretch)
-            vbox.addLayout(hbox)
+                flow_layout.addStretch()
+                grid.addWidget(flow, grid_row, 1)
 
-        group.setLayout(vbox)
+        group.setLayout(grid)
         return group
 
     # ── Teleop group ───────────────────────────────────────────────────────
