@@ -17,7 +17,7 @@ import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Joy, JointState
 from std_msgs.msg import Int32, String
-from std_srvs.srv import Trigger
+from std_srvs.srv import SetBool, Trigger
 
 from rby1_core_msgs.srv import (
     ConnectRobot, SetPower, SetServo, SetControlMode, MoveToJointPosition,
@@ -198,6 +198,7 @@ class ScmGuiNode(Node):
         self._cli_set_ns_ref    = self.create_client(SetNullspaceJointRef,     '/rby1/set_nullspace_joint_ref')
 
         # Service clients — vive_rby1
+        self._cli_set_use_torso = self.create_client(SetBool,       '/vive_rby1/set_use_torso')
         self._cli_teleop_start  = self.create_client(Trigger,       '/vive_rby1/teleop_start')
         self._cli_teleop_stop   = self.create_client(Trigger,       '/vive_rby1/teleop_stop')
         self._cli_toggle_clutch = self.create_client(Trigger,       '/vive_rby1/toggle_clutch')
@@ -374,6 +375,11 @@ class ScmGuiNode(Node):
 
     def call_trigger(self, client, done_cb=None):
         self._call_async(client, Trigger.Request(), done_cb)
+
+    def call_set_use_torso(self, enable: bool, done_cb=None):
+        req = SetBool.Request()
+        req.data = enable
+        self._call_async(self._cli_set_use_torso, req, done_cb)
 
     def call_ctrl_mode(self, source: str, control: str, done_cb=None):
         req = SetControlMode.Request()
@@ -1252,6 +1258,10 @@ class TeleopGuiWindow(QWidget):
         tr_row.addWidget(self._lbl_tracker_r)
         tr_row.addStretch()
         vbox.addLayout(tr_row)
+        self._chk_use_torso = QCheckBox('Use Torso')
+        self._chk_use_torso.setChecked(False)
+        self._chk_use_torso.stateChanged.connect(self._on_use_torso_changed)
+        vbox.addWidget(self._chk_use_torso)
         vbox.addStretch()
         group.setLayout(vbox)
         return group
@@ -1601,6 +1611,9 @@ class TeleopGuiWindow(QWidget):
 
     def _on_mirror_mode_changed(self, btn_id: int):
         self._node.pub_mirror_mode(btn_id == 1)
+
+    def _on_use_torso_changed(self, state):
+        self._node.call_set_use_torso(state == Qt.Checked.value)
 
     def _on_rec_btn(self):
         self._node.pub_task_id(self._spin_task.value())

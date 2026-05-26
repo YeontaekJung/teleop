@@ -44,7 +44,7 @@
 #include "scm_recording_msgs/srv/toggle_pause.hpp"
 #include "sensor_msgs/msg/joy.hpp"
 #include "sensor_msgs/msg/joint_state.hpp"
-#include "std_msgs/msg/bool.hpp"
+#include "std_srvs/srv/set_bool.hpp"
 #include "std_msgs/msg/int32.hpp"
 #include "std_msgs/msg/string.hpp"
 #include "std_srvs/srv/trigger.hpp"
@@ -261,7 +261,7 @@ class ViveRby1Node : public rclcpp::Node {
     declare_parameter("topic_joint_state", "/rby1/state/joint");
     declare_parameter("pos_scale", 1.0);
     declare_parameter("torso_pos_scale", 1.0);
-    declare_parameter("use_torso", true);
+    declare_parameter("use_torso", false);
     declare_parameter("ik_dt", 0.05);
     declare_parameter("publish_rate", 20.0);
     declare_parameter("sdk_max_delta_pos", 0.03);
@@ -312,8 +312,9 @@ class ViveRby1Node : public rclcpp::Node {
       });
     sub_mirror_mode_ = create_subscription<std_msgs::msg::String>(
       "/teleop/mirror_mode", 10, std::bind(&ViveRby1Node::onMirrorMode, this, std::placeholders::_1));
-    sub_use_torso_ = create_subscription<std_msgs::msg::Bool>(
-      "/teleop/use_torso", 10, std::bind(&ViveRby1Node::onUseTorso, this, std::placeholders::_1));
+    srv_set_use_torso_ = create_service<std_srvs::srv::SetBool>(
+      "/vive_rby1/set_use_torso",
+      std::bind(&ViveRby1Node::onSetUseTorso, this, std::placeholders::_1, std::placeholders::_2));
 
     pub_pose_cmd_ = create_publisher<rby1_core_msgs::msg::LinkPoseCommand>("/rby1/cmd/pose", stream_qos);
     // ── EE Pose → warmup hold ──────────────────────────────────────────
@@ -431,11 +432,16 @@ class ViveRby1Node : public rclcpp::Node {
     }
   }
 
-  void onUseTorso(const std_msgs::msg::Bool::SharedPtr msg) {
-    if (msg->data == use_torso_) {
+  void onSetUseTorso(
+      const std::shared_ptr<std_srvs::srv::SetBool::Request> req,
+      std::shared_ptr<std_srvs::srv::SetBool::Response> res)
+  {
+    if (req->data == use_torso_) {
+      res->success = true;
+      res->message = use_torso_ ? "already enabled" : "already disabled";
       return;
     }
-    use_torso_ = msg->data;
+    use_torso_ = req->data;
     RCLCPP_INFO(get_logger(), "[vive_rby1] use_torso -- %s", use_torso_ ? "true" : "false");
     if (!use_torso_) {
       // Stop sending link_torso_5: hw-core holds the torso at its last pose.
@@ -446,6 +452,8 @@ class ViveRby1Node : public rclcpp::Node {
       ref_body_ = tracker_b_.smoothed;
       torso5_0_ = ik_solver_->framePlacement("link_torso_5");
     }
+    res->success = true;
+    res->message = use_torso_ ? "enabled" : "disabled";
   }
 
   void publishClutchState() {
@@ -984,7 +992,7 @@ class ViveRby1Node : public rclcpp::Node {
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr sub_joint_state_;
   rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr sub_task_id_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr sub_mirror_mode_;
-  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr sub_use_torso_;
+  rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr srv_set_use_torso_;
   rclcpp::Subscription<geometry_msgs::msg::PoseArray>::SharedPtr sub_ee_pose_;
 
   rclcpp::Publisher<rby1_core_msgs::msg::LinkPoseCommand>::SharedPtr pub_pose_cmd_;
@@ -1051,7 +1059,7 @@ class ViveRby1Node : public rclcpp::Node {
 
   double pos_scale_{1.0};
   double torso_pos_scale_{1.0};
-  bool use_torso_{true};
+  bool use_torso_{false};
   double ik_dt_{0.05};
   double publish_rate_{20.0};
   double sdk_max_delta_pos_{0.03};
