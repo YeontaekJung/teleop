@@ -61,7 +61,10 @@ TELEOP_NODES = [
     ('vive_rby1_node',       'vive_rby1'),
     ('manus_inspire',        'manus_inspire'),
 ]
-NODES_TO_WATCH = CORE_NODES + TELEOP_NODES
+RECORDING_NODES = [
+    ('scm_recording', 'recorder'),
+]
+NODES_TO_WATCH = CORE_NODES + TELEOP_NODES + RECORDING_NODES
 
 REC_STATE_STYLE = {
     'IDLE':      ('⬤ IDLE',      '#888888'),
@@ -640,13 +643,11 @@ class TeleopGuiWindow(QWidget):
         btn_grid.addWidget(self._make_btn_with_fb('Servo On',  '#1976D2',
             lambda cb: self._node.call_servo(True,  done_cb=cb),
             lambda ok, _: self._update_lbl(self._lbl_servo,   'Servo On',  _C_ON)      if ok else None), 0, 2)
-        btn_grid.addWidget(self._make_btn_with_fb('Err Reset',   '#F57C00',
-            lambda cb: self._node.call_trigger(self._node._cli_err_reset,   done_cb=cb)), 0, 3)
         btn_grid.addWidget(self._make_btn_with_fb('Ctrl Enable', '#7B1FA2',
             lambda cb: self._node.call_trigger(self._node._cli_ctrl_enable, done_cb=cb),
-            lambda ok, _: self._update_lbl(self._lbl_control, 'Enabled',   _C_ON)      if ok else None), 0, 4)
+            lambda ok, _: self._update_lbl(self._lbl_control, 'Enabled',   _C_ON)      if ok else None), 0, 3)
         btn_grid.addWidget(self._make_btn_with_fb('Gripper Init', '#00838F',
-            lambda cb: self._node.call_trigger(self._node._cli_gripper_init, done_cb=cb)), 0, 5)
+            lambda cb: self._node.call_trigger(self._node._cli_gripper_init, done_cb=cb)), 0, 4)
 
         # Row 1: off buttons directly below their on counterparts
         btn_grid.addWidget(self._make_btn_with_fb('Power Off', '#C62828',
@@ -655,6 +656,8 @@ class TeleopGuiWindow(QWidget):
         btn_grid.addWidget(self._make_btn_with_fb('Servo Off', '#5C6BC0',
             lambda cb: self._node.call_servo(False, done_cb=cb),
             lambda ok, _: self._update_lbl(self._lbl_servo,   'Servo Off', _C_OFF_RED) if ok else None), 1, 2)
+        btn_grid.addWidget(self._make_btn_with_fb('Err Reset',   '#F57C00',
+            lambda cb: self._node.call_trigger(self._node._cli_err_reset,   done_cb=cb)), 1, 3)
 
         row.addLayout(btn_grid)
         return row
@@ -730,7 +733,7 @@ class TeleopGuiWindow(QWidget):
             for name in joints:
                 jrow = QHBoxLayout()
                 jrow.setSpacing(3)
-                lbl = QLabel(name)
+                lbl = QLabel(name.split('_')[-1])
                 lbl.setFont(QFont('Monospace', 8))
                 lim_lbl = QLabel('')
                 lim_lbl.setFont(QFont('Monospace', 7))
@@ -945,7 +948,7 @@ class TeleopGuiWindow(QWidget):
         for i in range(7):
             r_name = f'right_arm_{i}'
             l_name = f'left_arm_{i}'
-            ns_grid.addWidget(QLabel(f'arm_{i}'), i + 1, 0)
+            ns_grid.addWidget(QLabel(str(i)), i + 1, 0)
             r_spin = QDoubleSpinBox()
             r_spin.setRange(0.0, 5.0)
             r_spin.setDecimals(3)
@@ -954,7 +957,7 @@ class TeleopGuiWindow(QWidget):
             r_spin.setValue(0.05)
             r_spin.valueChanged.connect(self._on_imp_param_changed)
             ns_grid.addWidget(r_spin, i + 1, 1)
-            ns_grid.addWidget(QLabel(f'arm_{i}'), i + 1, 3)
+            ns_grid.addWidget(QLabel(str(i)), i + 1, 3)
             l_spin = QDoubleSpinBox()
             l_spin.setRange(0.0, 5.0)
             l_spin.setDecimals(3)
@@ -1182,7 +1185,7 @@ class TeleopGuiWindow(QWidget):
             ('driving',        [],           1),
             ('VLA',            [],           1),
             ('teleop',         TELEOP_NODES, 2),
-            ('recording',      [],           1),
+            ('recording',      RECORDING_NODES, 1),
         ]
 
         for title, nodes, stretch in sections:
@@ -1257,10 +1260,10 @@ class TeleopGuiWindow(QWidget):
         group = QGroupBox('Pedal')
         hbox  = QHBoxLayout()
         self._btn_pedals = []
-        for label in ['Resume/Pause', 'Discard', '● Rec']:
+        for label in ['Resume/\nPause', 'Discard', '● Rec']:
             btn = QPushButton(label)
             btn.setEnabled(False)
-            btn.setFixedHeight(32)
+            btn.setFixedHeight(44)
             btn.setStyleSheet('background-color: #ccc; color: #444;')
             hbox.addWidget(btn)
             self._btn_pedals.append(btn)
