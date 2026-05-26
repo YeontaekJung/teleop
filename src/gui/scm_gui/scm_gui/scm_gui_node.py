@@ -504,30 +504,34 @@ class TeleopGuiWindow(QWidget):
 
     def _build_ui(self):
         self.setWindowTitle('SCM Control')
-        self.setMinimumWidth(1400)
+        self.setMinimumWidth(1600)
 
-        root = QVBoxLayout()
-        root.setSpacing(6)
-        root.addWidget(self._build_rby1_group())
-        root.addWidget(self._build_node_indicators_group())
+        root = QHBoxLayout()
+        root.setSpacing(8)
+        root.setContentsMargins(6, 6, 6, 6)
 
-        mid_row = QHBoxLayout()
-        mid_row.setSpacing(8)
-
-        left_col = QVBoxLayout()
+        left_widget = QWidget()
+        left_widget.setMinimumWidth(600)
+        left_col = QVBoxLayout(left_widget)
+        left_col.setSpacing(6)
+        left_col.setContentsMargins(0, 0, 0, 0)
+        left_col.addWidget(self._build_rby1_group())
+        left_col.addWidget(self._build_node_indicators_group())
         left_col.addWidget(self._build_teleop_group())
         left_col.addStretch()
 
-        right_col = QVBoxLayout()
+        right_widget = QWidget()
+        right_widget.setMinimumWidth(800)
+        right_col = QVBoxLayout(right_widget)
         right_col.setSpacing(6)
+        right_col.setContentsMargins(0, 0, 0, 0)
         right_col.addWidget(self._build_joint_position_group())
         right_col.addWidget(self._build_cartesian_impedance_group())
         right_col.addStretch()
 
-        mid_row.addLayout(left_col, stretch=3)
-        mid_row.addLayout(right_col, stretch=2)
+        root.addWidget(left_widget, stretch=1)
+        root.addWidget(right_widget, stretch=1)
 
-        root.addLayout(mid_row)
         self.setLayout(root)
 
     # ── RB-Y1 group ────────────────────────────────────────────────────────
