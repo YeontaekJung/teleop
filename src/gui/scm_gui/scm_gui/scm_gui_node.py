@@ -229,7 +229,7 @@ class ScmGuiNode(Node):
         parts = msg.data.split()
         sl = parts[0].split(':')[1] if len(parts) > 0 else ''
         sr = parts[1].split(':')[1] if len(parts) > 1 else ''
-        sb = parts[2].split(':')[1] if len(parts) > 2 and parts[2].startswith('sb:') else ''
+        sb = parts[2].split(':')[1] if len(parts) > 2 and parts[2].startswith('B:') else ''
         for cb in self._tracker_status_cbs:
             cb(sl, sr, sb)
 

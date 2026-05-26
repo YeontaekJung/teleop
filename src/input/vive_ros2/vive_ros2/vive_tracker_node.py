@@ -156,6 +156,9 @@ class ViveTrackerNode(Node):
                 continue
             serial = get_serial(self._vr, i)
             if serial not in self._serial_to_name:
+                self.get_logger().warn(
+                    f'Unknown device serial: {serial} (idx {i}) — add to trackers.yaml if needed',
+                    throttle_duration_sec=10.0)
                 continue
             name = self._serial_to_name[serial]
             idx = self._name_to_idx[name]
