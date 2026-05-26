@@ -558,14 +558,15 @@ class TeleopGuiWindow(QWidget):
             'font-weight: bold; font-size: 13px;')
         self._btn_stop.clicked.connect(self._on_stop_move)
 
-        main_row = QHBoxLayout()
-        main_row.setSpacing(8)
-        main_row.addLayout(self._build_connect_settings_area())
-        main_row.addLayout(self._build_buttons_area())
-        main_row.addStretch()
-        main_row.addWidget(self._btn_stop)
+        vbox.addLayout(self._build_connect_settings_area())
 
-        vbox.addLayout(main_row)
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
+        btn_row.addLayout(self._build_buttons_area())
+        btn_row.addStretch()
+        btn_row.addWidget(self._btn_stop)
+        vbox.addLayout(btn_row)
+
         group.setLayout(vbox)
         return group
 
@@ -583,13 +584,9 @@ class TeleopGuiWindow(QWidget):
             row.addWidget(lbl)
         return row
 
-    def _build_connect_settings_area(self) -> QVBoxLayout:
-        outer = QVBoxLayout()
-        outer.setSpacing(4)
-
-        # Row 1: Sim/Real 선택 + IP 입력
-        row1 = QHBoxLayout()
-        row1.setSpacing(6)
+    def _build_connect_settings_area(self) -> QHBoxLayout:
+        row = QHBoxLayout()
+        row.setSpacing(6)
 
         self._rb_sim  = QRadioButton('Sim')
         self._rb_real = QRadioButton('Real')
@@ -601,14 +598,6 @@ class TeleopGuiWindow(QWidget):
 
         self._le_ip = QLineEdit('localhost:50051')
         self._le_ip.setFixedWidth(140)
-
-        row1.addWidget(self._rb_sim)
-        row1.addWidget(self._rb_real)
-        row1.addWidget(self._le_ip)
-
-        # Row 2: Model 선택 + No Gripper
-        row2 = QHBoxLayout()
-        row2.setSpacing(6)
 
         self._rb_model_a = QRadioButton('Model A')
         self._rb_model_m = QRadioButton('Model M')
@@ -622,13 +611,15 @@ class TeleopGuiWindow(QWidget):
         self._chk_no_gripper = QCheckBox('No Gripper')
         self._chk_no_gripper.setChecked(True)
 
-        row2.addWidget(self._rb_model_a)
-        row2.addWidget(self._rb_model_m)
-        row2.addWidget(self._chk_no_gripper)
-
-        outer.addLayout(row1)
-        outer.addLayout(row2)
-        return outer
+        row.addWidget(self._rb_sim)
+        row.addWidget(self._rb_real)
+        row.addWidget(self._le_ip)
+        row.addSpacing(16)
+        row.addWidget(self._rb_model_a)
+        row.addWidget(self._rb_model_m)
+        row.addWidget(self._chk_no_gripper)
+        row.addStretch()
+        return row
 
     def _build_buttons_area(self) -> QHBoxLayout:
         row = QHBoxLayout()
@@ -998,9 +989,6 @@ class TeleopGuiWindow(QWidget):
             self._cmb_ns_ref.setCurrentText(self._current_teleop_pose)
         self._cmb_ns_ref.currentTextChanged.connect(self._on_imp_param_changed)
         ns_ref_vbox.addWidget(self._cmb_ns_ref)
-        btn_apply_ns_ref = self._make_btn_with_fb(
-            'Apply Nullspace Ref', '#1565C0',
-            lambda cb: self._on_apply_ns_ref(cb), height=28)
         ns_ref_vbox.addStretch()
         cols.addLayout(ns_ref_vbox, stretch=1)
 
@@ -1024,7 +1012,7 @@ class TeleopGuiWindow(QWidget):
         apply_right = QHBoxLayout()
         apply_right.addStretch()
         btn_apply_ns_ref = self._make_btn_with_fb(
-            'Apply Nullspace Ref', '#1565C0',
+            'Apply Ref Pose', '#1565C0',
             lambda cb: self._on_apply_ns_ref(cb), height=28)
         apply_right.addWidget(btn_apply_ns_ref)
         apply_row.addLayout(apply_left,  stretch=3)
