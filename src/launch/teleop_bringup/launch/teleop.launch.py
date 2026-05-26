@@ -24,6 +24,9 @@ def generate_launch_description():
     _default_urdf = os.path.join(_share, 'robot_description', 'rby1', 'rby1.urdf')
     _default_srdf = os.path.join(_share, 'robot_description', 'rby1', 'rby1.srdf')
 
+    _vive_share    = get_package_share_directory('vive_ros2')
+    _trackers_yaml = os.path.join(_vive_share, 'config', 'trackers.yaml')
+
     return LaunchDescription([
 
         # ── Launch arguments ───────────────────────────────────────────────
@@ -79,6 +82,7 @@ def generate_launch_description():
                     executable='vive_tracker_node',
                     name='vive_tracker_node',
                     output='screen',
+                    parameters=[_trackers_yaml],
                 ),
             ],
         ),
