@@ -504,15 +504,30 @@ class TeleopGuiWindow(QWidget):
 
     def _build_ui(self):
         self.setWindowTitle('SCM Control')
-        self.setMinimumWidth(1100)
+        self.setMinimumWidth(1400)
 
         root = QVBoxLayout()
         root.setSpacing(6)
         root.addWidget(self._build_rby1_group())
         root.addWidget(self._build_node_indicators_group())
-        root.addWidget(self._build_joint_position_group())
-        root.addWidget(self._build_cartesian_impedance_group())
-        root.addWidget(self._build_teleop_group())
+
+        mid_row = QHBoxLayout()
+        mid_row.setSpacing(8)
+
+        left_col = QVBoxLayout()
+        left_col.addWidget(self._build_teleop_group())
+        left_col.addStretch()
+
+        right_col = QVBoxLayout()
+        right_col.setSpacing(6)
+        right_col.addWidget(self._build_joint_position_group())
+        right_col.addWidget(self._build_cartesian_impedance_group())
+        right_col.addStretch()
+
+        mid_row.addLayout(left_col, stretch=3)
+        mid_row.addLayout(right_col, stretch=2)
+
+        root.addLayout(mid_row)
         self.setLayout(root)
 
     # ── RB-Y1 group ────────────────────────────────────────────────────────
