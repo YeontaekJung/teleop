@@ -14,12 +14,21 @@ vive_ros2       →  vive_rby1_node (C++)   →  /rby1/cmd/pose  (sdk_impedance/
                    vive_rby1_debug_node   →  /rby1/cmd/joint (pink_position/impedance, debug only)
                    (Python, manual only)  →  /rby1/cmd/pose  (sdk modes)
 pedal_ros2      →  vive_rby1 state machine→  /scm_recording/{start,end,toggle_pause}
-GUI             →  teleop_gui_node        →  /rby1/ctrl/mode, /rby1/stream services
+GUI             →  scm_gui_node           →  /rby1/ctrl/mode, /rby1/stream, /rby1/set_nullspace_joint_ref, /rby1/set_cartesian_joint_limits, /rby1/set_nullspace_weight, /vive_rby1/set_use_torso services
 ```
 
-All msg/srv/action definitions are under `src/msgs/`.
+Source layout (since the 2026-05 reorg, packages are grouped by role under `src/`):
 
-A GUI node (`teleop_gui`) provides live system status, teleop controls, tracker status, and calibration.
+```
+teleop/src/
+├── input/   {vive_ros2, manus_ros2, pedal_ros2}
+├── core/    {vive_rby1, manus_inspire, rby1_ik}
+├── gui/     scm_gui
+├── launch/  teleop_bringup
+└── msgs/    {rby1_core_msgs, scm_recording_msgs, manus_ros2_msgs, inspire_hand_msgs, interbotix_xs_msgs (COLCON_IGNORE)}
+```
+
+A GUI node (`scm_gui`, executable `scm_gui_node`) provides live system status (Core / Vision / Teleop / Recording node groups), teleop controls, tracker status, calibration, and runtime CartesianImpedance tuning (joint limits / nullspace weights / nullspace ref pose).
 
 ## Published Topics
 
@@ -27,9 +36,13 @@ A GUI node (`teleop_gui`) provides live system status, teleop controls, tracker 
 
 | Topic | Type | Description |
 |-------|------|-------------|
-| `/rby1/state/status` | `std_msgs/String` | JSON 시스템 상태 (control/power/servo/stream/gripper/ctr_type) |
-| `/rby1/state/joint` | `sensor_msgs/JointState` | 전체 joint 실제값 (position / velocity / torque), 항상 100 Hz |
+| `/rby1/state/status` | `std_msgs/String` | JSON system state — `control_state`(str) + `power_state`/`servo_state`/`stream_state`(bool) + `has_gripper`(bool) + `ctr_type`(str) |
+| `/rby1/state/joint` | `sensor_msgs/JointState` | Body joints only (20: torso+arms) — wheels and head excluded. Always 100 Hz. |
 | `/rby1/state/ee_pose` | `geometry_msgs/PoseArray` | SDK FK 기반 EE pose — poses[0]=ee_right, poses[1]=ee_left (base frame) |
+| `/rby1/state/odom` | `nav_msgs/Odometry` | Base odometry, always-on |
+| `/rby1/state/battery` | `sensor_msgs/BatteryState` | Battery state, always-on |
+| `/rby1/state/ft/{right,left}` | `geometry_msgs/WrenchStamped` | Per-arm tool-flange F/T, always-on |
+| `/rby1/diag/manipulability` | `std_msgs/Float64MultiArray` | `[right, left]` manipulability index |
 | `/rby1/cmd/joint_ik` | `sensor_msgs/JointState` | SDK IK reference (CartesianImpedance 스트림에서만 발행) |
 
 ### vive_rby1_node
@@ -40,7 +53,7 @@ A GUI node (`teleop_gui`) provides live system status, teleop controls, tracker 
 | `/rby1/cmd/joint` | `sensor_msgs/JointState` | pink_position / pink_impedance joint 명령 (Python 디버그 노드만) |
 | `/teleop/rec_state` | `std_msgs/String` | 녹화 상태 (IDLE / ARMING / READY / RECORDING / PAUSED) |
 | `/teleop/rec_episode` | `std_msgs/Int32` | 현재 에피소드 번호 |
-| `/teleop/tracker_status` | `std_msgs/String` | 트래커 상태 (L:OK/JITTER/LOST R:OK/JITTER/LOST) |
+| `/teleop/tracker_status` | `std_msgs/String` | 트래커 상태 — `L:OK/JITTER/LOST R:OK/JITTER/LOST` (+ `B:OK/JITTER/LOST` when a body tracker has been seen) |
 | `/teleop/clutch_state` | `std_msgs/String` | clutch engaged / disengaged |
 
 ## Hardware Requirements (Current Setup)
@@ -143,13 +156,16 @@ source install/setup.bash
 
 ### Vive Tracker serial numbers
 
-Edit `src/input/vive_ros2/vive_ros2/vive_tracker_node.py` (or pass as ROS parameters):
+Serials are loaded from `src/input/vive_ros2/config/trackers.yaml` (installed to the `vive_ros2` share dir and passed by the default launch). Edit that file, or pass as ROS parameters:
 
-```python
-self.declare_parameter('serial_station_left',  'LHB-XXXXXXXX')
-self.declare_parameter('serial_station_right', 'LHB-XXXXXXXX')
-self.declare_parameter('serial_tracker_left',  'LHR-XXXXXXXX')
-self.declare_parameter('serial_tracker_right', 'LHR-XXXXXXXX')
+```yaml
+vive_tracker_node:
+  ros__parameters:
+    serial_station_left:  LHB-XXXXXXXX
+    serial_station_right: LHB-XXXXXXXX
+    serial_tracker_left:  LHR-XXXXXXXX
+    serial_tracker_right: LHR-XXXXXXXX
+    serial_tracker_body:  LHR-XXXXXXXX   # optional body tracker for torso teleop
 ```
 
 Find serials via SteamVR → Devices menu, or:
@@ -173,10 +189,12 @@ Adjustable in `src/launch/teleop_bringup/launch/teleop.launch.py`:
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `publish_rate` | 100.0 Hz | IK command publish rate |
+| `publish_rate` | 100.0 Hz | IK command publish rate (matches hw-core 100 Hz RT loop) |
 | `ik_dt` | 0.05 s | Differential IK time step (larger = faster tracking, more overshoot) |
 | `pos_scale` | 0.5 | Tracker-to-robot position scale (hand trackers) |
 | `torso_pos_scale` | 1.0 | Body tracker position scale (torso) |
+| `use_torso` | `False` | Enable body-tracker → `link_torso_5` streaming. Toggle at runtime via the GUI **Use Torso** checkbox (`/vive_rby1/set_use_torso`) or `/teleop/use_torso` topic. |
+| `sdk_max_delta_pos` | 0.03 m | Per-frame Cartesian step clamp (mirrors hw-core `cmd_pose.max_delta_pos`). |
 
 `max_teleop_dq` (joint velocity clamp, 1.5 rad/s) is hardcoded in `src/core/vive_rby1/src/vive_rby1_node.cpp`.
 
@@ -187,7 +205,7 @@ Adjustable in `src/launch/teleop_bringup/launch/teleop.launch.py`:
 | Pedal | Function |
 |-------|----------|
 | A (left) | Toggle arm engage / disengage |
-| B (center) | Spare |
+| B (center) | Discard episode — calls `/scm_recording/end` with `discard=true` to abort the active episode |
 | C (right) | Toggle Start / End recording episode |
 
 ### Control Modes
@@ -208,9 +226,19 @@ Use the GUI **Teleop** panel buttons directly:
 | Button | Action |
 |--------|--------|
 | ▶ Teleop Start | Set control mode → start stream (`/rby1/ctrl/mode` + `/rby1/stream` services) |
-| Ready Pose | Move robot to ready configuration (`/rby1/move_to_joint_position`) |
-| VLA Pose | Move robot to VLA home pose |
+| Move To Pose | Move robot to a named joint preset from `config/named_poses.yaml` (`/rby1/move_to_joint_position`) |
+| Use Torso (checkbox) | Toggle body-tracker → torso CartesianImpedance streaming (`/vive_rby1/set_use_torso`). Default off. |
 | ■ Teleop Stop | Stop stream |
+
+The GUI also exposes a **Cartesian Impedance Params** section that live-updates hw-core via the three runtime services:
+
+| Control | Service |
+|---------|---------|
+| Joint limits table → `[Apply Joint Limits]` | `/rby1/set_cartesian_joint_limits` |
+| Nullspace weights table → `[Apply Weights]` | `/rby1/set_nullspace_weight` |
+| Nullspace ref pose dropdown → `[Apply Nullspace Ref]` | `/vive_rby1/set_teleop_pose` + `/rby1/set_nullspace_joint_ref` (both fire together) |
+
+Presets are saved to `config/impedance_presets.yaml`.
 
 ### Recording Workflow
 
@@ -236,12 +264,12 @@ Recording states:
 
 ### Tracker Status
 
-The GUI Node Status panel shows live tracker health:
+The GUI Node Status panel shows live tracker health. The `/teleop/tracker_status` string lists left/right hand trackers (`L:` / `R:`) and, when a body tracker has been seen, body (`B:`):
 
 | Status | Color | Meaning |
 |--------|-------|---------|
 | OK | green | Tracker data arriving normally |
-| JITTER | yellow | High position variance detected (> 3mm σ over last 20 samples) |
+| JITTER | yellow | High position variance detected (> 3 mm σ across a sliding window — gated by ≥10 samples in a 20-deep buffer) |
 | LOST | red | No data received for > 0.5s |
 
 ### Manus Hand Calibration
@@ -281,7 +309,7 @@ ros2 run vive_rby1 vive_rby1_debug_node   # optional legacy Python debug node
 ros2 run manus_inspire manus_inspire_node
 
 # GUI
-ros2 run teleop_gui teleop_gui_node
+ros2 run scm_gui scm_gui_node
 ```
 
 ## Packages
@@ -290,17 +318,16 @@ ros2 run teleop_gui teleop_gui_node
 |---------|-------|-------------|
 | `pedal_ros2` | input | PCsensor FootSwitch → `sensor_msgs/Joy` on `/teleop/pedal` |
 | `manus_ros2` | input | Manus glove SDK → ROS2 (C++) |
-| `vive_ros2` | input | Vive Tracker 3.0 → `/teleop/tracker/left\|right` |
+| `vive_ros2` | input | Vive Tracker 3.0 → `/teleop/tracker/{left,right,body}` (config in `trackers.yaml`) |
 | `manus_ros2_msgs` | msgs | Manus glove message types |
 | `inspire_hand_msgs` | msgs | Inspire hand message types |
 | `scm_recording_msgs` | msgs | Recording core service definitions |
-| `rby1_core_msgs` | msgs | RB-Y1 core srv/msg definitions (10 services + `LinkPoseCommand`) |
+| `rby1_core_msgs` | msgs | RB-Y1 core srv/msg definitions (10 lifecycle services + 3 runtime tuning services + `LinkPoseCommand`) |
 | `manus_inspire` | core | Manus glove data → Inspire hand commands + 4-phase calibration |
-| `rby1_ik` | core | Legacy Python IK helper kept for debug/experiments |
-| `vive_rby1` | core | Tracker delta → RB-Y1 joint commands, recording state machine |
-| `teleop_gui` | gui | PySide6 GUI (node status, tracker status, teleop panel, recording, calibration) |
+| `rby1_ik` | core | Legacy Python IK helper kept for debug/experiments (consumed only by `vive_rby1_debug_node`) |
+| `vive_rby1` | core | Tracker delta → RB-Y1 joint/pose commands, recording state machine, body-tracker → torso |
+| `scm_gui` | gui | PySide6 GUI — node status (Core / Vision / Teleop / Recording groups), tracker status, teleop panel, recording panel, Manus calibration, runtime CartesianImpedance tuning |
 | `teleop_bringup` | launch | Launch file for full system |
-| `inspire_driver` | output | Inspire hand hardware driver |
 
 ## Troubleshooting
 
@@ -332,5 +359,5 @@ ros2 run teleop_gui teleop_gui_node
 
 **Robot joint trembling**
 - Reduce `max_teleop_dq` in `rby1_ik.py` (currently 1.5 rad/s).
-- Reduce `ik_dt` in launch file (currently 0.1s).
+- Reduce `ik_dt` in launch file (currently 0.05s).
 - Both together determine max joint velocity: `max_teleop_dq × ik_dt = max Δq per step`.

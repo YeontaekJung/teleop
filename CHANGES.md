@@ -30,11 +30,11 @@
 
 - **배경:** `teleop-branch`(다른 개발자, 구 인터페이스)와 전체 코드 비교 결과, torso teleop 기능(body tracker → `link_torso_5` CartesianImpedance)은 **우리 코드에 이미 완비**되어 있었음(공통 조상 커밋 `3f45202`/hw-core `738c97c`에서 개발, 우리 리팩터가 name-keyed `LinkPoseCommand` + YAML 파라미터화로 유지·개선). 따라서 포팅이 아니라 **양쪽 코드 모두에 없던 개선점 4건**을 추가함. 변경은 teleop 단독, hw-core 변경 없음.
 - `core/vive_rby1/src/vive_rby1_node.cpp`:
-  - **torso on/off 토글:** `use_torso` 파라미터(기본 true) + `/teleop/use_torso`(`std_msgs/Bool`) 런타임 구독(`onUseTorso`) 추가. 기존 `mirror_mode`(`/teleop/mirror_mode`) 패턴을 그대로 따름. off 전환 시 `ref_body_`/`torso5_0_` reset(→ teleop가 `link_torso_5` 전송 중단 → hw-core가 마지막 torso 포즈 유지/freeze), on 재전환 시 engage 중이면 현재 torso 포즈 기준으로 재캡처. engage 캡처(`engage()`)와 스트림 전송 블록 모두 `use_torso_` 게이트 추가.
+  - **torso on/off 토글:** `use_torso` 파라미터(노드 기본 false) + `/teleop/use_torso`(`std_msgs/Bool`) 런타임 구독 및 `/vive_rby1/set_use_torso`(`std_srvs/SetBool`) 서비스 추가. 기존 `mirror_mode`(`/teleop/mirror_mode`) 패턴을 그대로 따름. off 전환 시 `ref_body_`/`torso5_0_` reset(→ teleop가 `link_torso_5` 전송 중단 → hw-core가 마지막 torso 포즈 유지/freeze), on 재전환 시 engage 중이면 현재 torso 포즈 기준으로 재캡처. engage 캡처(`engage()`)와 스트림 전송 블록 모두 `use_torso_` 게이트 추가.
   - **늦은 body tracker 재캡처:** `onTrackerBody`에서 `engaged_ && use_torso_ && !ref_body_`이면 처음 들어온 시점에 `ref_body_`/`torso5_0_` 캡처. engage 시점에 body tracker가 없던 경우에도 재engage 없이 torso가 부드럽게 합류.
   - **body tracker 헬스 표시:** `onTimer`의 `/teleop/tracker_status` 문자열에 body tracker 수신 이력이 있을 때만 `B:OK/JITTER/LOST` 추가(`trackerStatus()` 재사용). 미설치 시 상시 `B:LOST` 노이즈 방지.
   - include `std_msgs/msg/bool.hpp`, 멤버 `sub_use_torso_`/`use_torso_` 추가.
-- `teleop_bringup/launch/teleop.launch.py`: `vive_rby1_node` 파라미터에 `torso_pos_scale: 1.0`(우리 launch에서 누락되어 노드 기본값 의존하던 것 복원), `use_torso: True` 추가.
+- `teleop_bringup/launch/teleop.launch.py`: `vive_rby1_node` 파라미터에 `torso_pos_scale: 1.0`(우리 launch에서 누락되어 노드 기본값 의존하던 것 복원), `use_torso: False` 추가(기본 off — GUI `Use Torso` 체크박스로 런타임에 enable). 이전 본 changelog 초기 작성 시점에 `True`로 기록되어 있었으나 이후 적용된 launch에서는 `False`로 머지되었음.
 - `core/vive_rby1/config/vive_rby1.yaml`: `torso_pos_scale`, `use_torso` 항목 문서화(주석 포함). 단, 해당 yaml은 stale하며 실제 권위는 launch dict.
 - 검증: ROS 미설치 본(WSL) 환경 → colcon 빌드 미수행(빌드는 Docker/`docker/Dockerfile.teleop`). launch는 `python3 -m py_compile` 통과. 사용자 ROS2 환경에서 `cd teleop && colcon build --packages-select vive_rby1` 필요. 런타임: `ros2 param get /vive_rby1_node use_torso`, body tracker 가동 시 `/teleop/tracker_status`에 `B:` 표시, `ros2 topic pub -1 /teleop/use_torso std_msgs/Bool "{data: false}"` 후 `/rby1/cmd/pose`에서 `link_torso_5` 사라짐/`true`로 복귀 확인.
 
