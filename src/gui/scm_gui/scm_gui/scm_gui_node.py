@@ -553,7 +553,6 @@ class TeleopGuiWindow(QWidget):
         left_col.setSpacing(6)
         left_col.setContentsMargins(0, 0, 0, 0)
         left_col.addWidget(self._build_rby1_group())
-        left_col.addWidget(self._build_ctrl_mode_group())
         left_col.addWidget(self._build_node_indicators_group())
         left_col.addWidget(self._build_teleop_group())
         left_col.addStretch()
@@ -563,6 +562,7 @@ class TeleopGuiWindow(QWidget):
         right_col = QVBoxLayout(right_widget)
         right_col.setSpacing(6)
         right_col.setContentsMargins(0, 0, 0, 0)
+        right_col.addWidget(self._build_ctrl_mode_group())
         right_col.addWidget(self._build_joint_position_group())
         right_col.addWidget(self._build_cartesian_impedance_group())
         right_col.addStretch()
@@ -575,7 +575,7 @@ class TeleopGuiWindow(QWidget):
     # ── RB-Y1 group ────────────────────────────────────────────────────────
 
     def _build_rby1_group(self) -> QGroupBox:
-        group = QGroupBox('RB-Y1')
+        group = QGroupBox('RB-Y1 Manager')
         vbox  = QVBoxLayout()
         vbox.setSpacing(5)
         vbox.addLayout(self._build_status_row())
@@ -605,10 +605,9 @@ class TeleopGuiWindow(QWidget):
         self._lbl_power   = _make_status_label('Power')
         self._lbl_servo   = _make_status_label('Servo')
         self._lbl_control = _make_status_label('Control')
-        self._lbl_stream  = _make_status_label('Stream')
         self._lbl_gripper = _make_status_label('Gripper')
         for lbl in (self._lbl_power, self._lbl_servo, self._lbl_control,
-                    self._lbl_stream, self._lbl_gripper):
+                    self._lbl_gripper):
             row.addWidget(lbl)
         return row
 
@@ -673,9 +672,6 @@ class TeleopGuiWindow(QWidget):
             lambda ok, _: self._update_lbl(self._lbl_control, 'Enabled',   _C_ON)      if ok else None), 0, 3)
         btn_grid.addWidget(self._make_btn_with_fb('Gripper Init', '#00838F',
             lambda cb: self._node.call_trigger(self._node._cli_gripper_init, done_cb=cb)), 0, 4)
-        btn_grid.addWidget(self._make_btn_with_fb('Stream On', '#00695C',
-            lambda cb: self._node.call_stream(True,  done_cb=cb),
-            lambda ok, _: self._update_lbl(self._lbl_stream, 'Stream On',  _C_ON)      if ok else None), 0, 5)
 
         # Row 1: off buttons directly below their on counterparts
         btn_grid.addWidget(self._make_btn_with_fb('Power Off', '#C62828',
@@ -686,9 +682,6 @@ class TeleopGuiWindow(QWidget):
             lambda ok, _: self._update_lbl(self._lbl_servo,   'Servo Off', _C_OFF_RED) if ok else None), 1, 2)
         btn_grid.addWidget(self._make_btn_with_fb('Err Reset',   '#F57C00',
             lambda cb: self._node.call_trigger(self._node._cli_err_reset,   done_cb=cb)), 1, 3)
-        btn_grid.addWidget(self._make_btn_with_fb('Stream Off', '#4E342E',
-            lambda cb: self._node.call_stream(False, done_cb=cb),
-            lambda ok, _: self._update_lbl(self._lbl_stream, 'Stream Off', _C_OFF_RED) if ok else None), 1, 5)
 
         row.addLayout(btn_grid)
         return row
@@ -696,7 +689,7 @@ class TeleopGuiWindow(QWidget):
     # ── Joint Position group ───────────────────────────────────────────────
 
     def _build_joint_position_group(self) -> QGroupBox:
-        group = QGroupBox('Joint Position')
+        group = QGroupBox('Joint Position Manager')
         main_row = QHBoxLayout()
         main_row.setSpacing(10)
 
@@ -882,7 +875,7 @@ class TeleopGuiWindow(QWidget):
     # ── Cartesian Impedance Params group ──────────────────────────────────
 
     def _build_cartesian_impedance_group(self) -> QGroupBox:
-        group = QGroupBox('Inverse Kinematic Params')
+        group = QGroupBox('IK Parameter Manager')
         top_layout = QVBoxLayout()
         top_layout.setSpacing(4)
         self._filling_imp_preset = False
@@ -1200,13 +1193,15 @@ class TeleopGuiWindow(QWidget):
     # ── Control Mode group ────────────────────────────────────────────────
 
     def _build_ctrl_mode_group(self) -> QGroupBox:
-        group = QGroupBox('Control Mode')
+        group = QGroupBox('Control Mode Manager')
         hbox = QHBoxLayout()
-        hbox.setSpacing(12)
+        hbox.setSpacing(16)
 
+        # Current mode indicator
         self._lbl_ctr_type = _make_status_label('Mode')
         hbox.addWidget(self._lbl_ctr_type)
 
+        # Source and Ctrl radio buttons
         src_row = QHBoxLayout()
         src_row.setSpacing(4)
         src_row.addWidget(QLabel('Source:'))
@@ -1240,6 +1235,18 @@ class TeleopGuiWindow(QWidget):
         rows_vbox.addLayout(src_row)
         rows_vbox.addLayout(ctrl_row)
         hbox.addWidget(rows_widget)
+
+        # Stream indicator + On/Off buttons
+        self._lbl_stream = _make_status_label('Stream')
+        self._btn_stream_on  = _make_btn('On',  '#2E7D32', height=30)
+        self._btn_stream_off = _make_btn('Off', '#C62828', height=30)
+        self._btn_stream_on.setFixedWidth(50)
+        self._btn_stream_off.setFixedWidth(50)
+        self._btn_stream_on.clicked.connect(self._on_stream_on)
+        self._btn_stream_off.clicked.connect(self._on_stream_off)
+        hbox.addWidget(self._lbl_stream)
+        hbox.addWidget(self._btn_stream_on)
+        hbox.addWidget(self._btn_stream_off)
         hbox.addStretch()
 
         group.setLayout(hbox)
@@ -1248,7 +1255,7 @@ class TeleopGuiWindow(QWidget):
     # ── Node Indicators group ─────────────────────────────────────────────
 
     def _build_node_indicators_group(self) -> QGroupBox:
-        group = QGroupBox('Node Indicators')
+        group = QGroupBox('ROS2 Node Status')
         grid = QGridLayout()
         grid.setSpacing(2)
         grid.setContentsMargins(6, 6, 6, 6)
@@ -1282,7 +1289,7 @@ class TeleopGuiWindow(QWidget):
     # ── Teleop group ───────────────────────────────────────────────────────
 
     def _build_teleop_group(self) -> QGroupBox:
-        group = QGroupBox('Teleop')
+        group = QGroupBox('Teleop Manager')
         hbox  = QHBoxLayout()
         hbox.setSpacing(8)
 
@@ -1638,6 +1645,18 @@ class TeleopGuiWindow(QWidget):
 
     def _on_rec_episode(self, episode: int):
         self._lbl_episode.setText(str(episode) if episode >= 0 else '—')
+
+    def _on_stream_on(self):
+        self._btn_stream_on.setEnabled(False)
+        def _done(ok, msg):
+            self._sig.dispatch.emit(lambda: self._btn_stream_on.setEnabled(True))
+        self._node.call_stream(True, done_cb=_done)
+
+    def _on_stream_off(self):
+        self._btn_stream_off.setEnabled(False)
+        def _done(ok, msg):
+            self._sig.dispatch.emit(lambda: self._btn_stream_off.setEnabled(True))
+        self._node.call_stream(False, done_cb=_done)
 
     def _on_ctrl_mode_changed(self, _btn_id: int):
         src  = 'joint'     if self._bg_src.checkedId()  == 0 else 'cartesian'
