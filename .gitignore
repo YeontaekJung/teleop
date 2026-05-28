@@ -3,10 +3,6 @@
 */log/*
 /ROS_BAG/*
 #*.zip
-# Python cache
-__pycache__/
-*.py[cod]
-*$py.class
 
 # ManusSDK - binary too large for GitHub (>100MB), copy manually to repo root
 # See README.md → ManusSDK Setup
@@ -26,3 +22,8 @@ __pycache__/
 
 # Claude Code local config
 /.claude/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
