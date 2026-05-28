@@ -736,8 +736,8 @@ class TeleopGuiWindow(QWidget):
         self._lbl_control = _make_status_label('Ctrl')
         self._lbl_mobile  = _make_status_label('Mobile')
         self._lbl_gripper = _make_status_label('Gripper')
-        for lbl in (self._lbl_power, self._lbl_servo, self._lbl_control,
-                    self._lbl_mobile, self._lbl_gripper):
+        for lbl in (self._lbl_power, self._lbl_servo, self._lbl_mobile,
+                    self._lbl_control, self._lbl_gripper):
             row.addWidget(lbl)
         return row
 
@@ -797,12 +797,13 @@ class TeleopGuiWindow(QWidget):
         btn_grid.addWidget(self._make_btn_with_fb('Servo On',  '#1976D2',
             lambda cb: self._node.call_servo(True,  no_wheel=True, done_cb=cb),
             lambda ok, _: self._update_lbl(self._lbl_servo,   'Servo On',  _C_ON)      if ok else None), 0, 2)
-        btn_grid.addWidget(self._make_btn_with_fb('Ctrl Enable', '#7B1FA2',
-            lambda cb: self._node.call_trigger(self._node._cli_ctrl_enable, done_cb=cb),
-            lambda ok, _: self._update_lbl(self._lbl_control, 'Ctrl Enabled', _C_ON)   if ok else None), 0, 3)
         btn_grid.addWidget(self._make_btn_with_fb('Mobile On',  '#00796B',
             lambda cb: self._node.call_servo(True,  wheel_only=True, done_cb=cb),
-            lambda ok, _: self._update_lbl(self._lbl_mobile,  'Mobile On', _C_ON)      if ok else None), 0, 4)
+            lambda ok, m: self._update_lbl(self._lbl_mobile,  'Mobile On', _C_ON)
+                          if ok else self._update_lbl(self._lbl_mobile, f'Mob FAIL:{m}', _C_FAULT)), 0, 3)
+        btn_grid.addWidget(self._make_btn_with_fb('Ctrl Enable', '#7B1FA2',
+            lambda cb: self._node.call_trigger(self._node._cli_ctrl_enable, done_cb=cb),
+            lambda ok, _: self._update_lbl(self._lbl_control, 'Ctrl Enabled', _C_ON)   if ok else None), 0, 4)
         btn_grid.addWidget(self._make_btn_with_fb('Gripper Init', '#00838F',
             lambda cb: self._node.call_trigger(self._node._cli_gripper_init, done_cb=cb)), 0, 5)
 
@@ -813,11 +814,12 @@ class TeleopGuiWindow(QWidget):
         btn_grid.addWidget(self._make_btn_with_fb('Servo Off', '#5C6BC0',
             lambda cb: self._node.call_servo(False, no_wheel=True, done_cb=cb),
             lambda ok, _: self._update_lbl(self._lbl_servo,   'Servo Off', _C_OFF_RED) if ok else None), 1, 2)
-        btn_grid.addWidget(self._make_btn_with_fb('Err Reset',   '#F57C00',
-            lambda cb: self._node.call_trigger(self._node._cli_err_reset,   done_cb=cb)), 1, 3)
         btn_grid.addWidget(self._make_btn_with_fb('Mobile Off', '#004D40',
             lambda cb: self._node.call_servo(False, wheel_only=True, done_cb=cb),
-            lambda ok, _: self._update_lbl(self._lbl_mobile,  'Mobile Off', _C_OFF_RED) if ok else None), 1, 4)
+            lambda ok, m: self._update_lbl(self._lbl_mobile,  'Mobile Off', _C_OFF_RED)
+                          if ok else self._update_lbl(self._lbl_mobile, f'Mob FAIL:{m}', _C_FAULT)), 1, 3)
+        btn_grid.addWidget(self._make_btn_with_fb('Err Reset',   '#F57C00',
+            lambda cb: self._node.call_trigger(self._node._cli_err_reset,   done_cb=cb)), 1, 4)
 
         row.addLayout(btn_grid)
         return row
@@ -1843,10 +1845,11 @@ class TeleopGuiWindow(QWidget):
             spin.setStyleSheet('')
 
     def _on_rby1_status(self, data: dict):
-        power   = bool(data.get('power_state',  False))
-        servo   = bool(data.get('servo_state',  False))
-        stream  = bool(data.get('stream_state', False))
-        gripper = bool(data.get('has_gripper',  False))
+        power   = bool(data.get('power_state',       False))
+        servo   = bool(data.get('servo_state',       False))
+        wheel   = bool(data.get('wheel_servo_state', False))
+        stream  = bool(data.get('stream_state',      False))
+        gripper = bool(data.get('has_gripper',       False))
         ctrl    = data.get('control_state', '')
         ctr_type = data.get('ctr_type', '')
 
@@ -1854,10 +1857,11 @@ class TeleopGuiWindow(QWidget):
             lbl.setText(f'  {text}  ')
             lbl.setStyleSheet(f'background-color: {color}; border-radius: 4px;')
 
-        _set(self._lbl_power,    'Power On'  if power   else 'Power Off',  _C_ON if power   else _C_OFF_RED)
-        _set(self._lbl_servo,    'Servo On'  if servo   else 'Servo Off',  _C_ON if servo   else _C_OFF_RED)
-        _set(self._lbl_stream,   'Stream On' if stream  else 'Stream Off', _C_ON if stream  else _C_OFF_RED)
-        _set(self._lbl_gripper,  'Gripper ✓' if gripper else 'Gripper ✗',  _C_ON if gripper else _C_OFF)
+        _set(self._lbl_power,    'Power On'   if power   else 'Power Off',  _C_ON if power   else _C_OFF_RED)
+        _set(self._lbl_servo,    'Servo On'   if servo   else 'Servo Off',  _C_ON if servo   else _C_OFF_RED)
+        _set(self._lbl_mobile,   'Mobile On'  if wheel   else 'Mobile Off', _C_ON if wheel   else _C_OFF_RED)
+        _set(self._lbl_stream,   'Stream On'  if stream  else 'Stream Off', _C_ON if stream  else _C_OFF_RED)
+        _set(self._lbl_gripper,  'Gripper ✓'  if gripper else 'Gripper ✗',  _C_ON if gripper else _C_OFF)
         _set(self._lbl_ctr_type, ctr_type or '—', _C_ON if stream else _C_OFF)
 
         if stream != self._stream_on:
