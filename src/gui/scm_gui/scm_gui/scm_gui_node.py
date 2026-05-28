@@ -20,7 +20,7 @@ from std_msgs.msg import Int32, String
 from std_srvs.srv import SetBool, Trigger
 
 from rby1_core_msgs.srv import (
-    ConnectRobot, SetPower, SetServo, SetControlMode, MoveToJointPosition,
+    ConnectRobot, SetPower, SetServo, SetControlMode, SetStream, MoveToJointPosition,
     SetCartesianJointLimits, SetNullspaceWeight, SetNullspaceJointRef,
 )
 from rcl_interfaces.srv import SetParameters
@@ -52,7 +52,8 @@ BODY_JOINT_NAMES = [
 ]
 
 CORE_NODES = [
-    ('rby1_core_node', 'rby1_core'),
+    ('rby1_core_node',      'rby1_core'),
+    ('inspire_hand_driver', 'inspire_hand'),
 ]
 VISION_NODES = [
     ('cam_high/camera',       'cam_high'),
@@ -72,14 +73,14 @@ RECORDING_NODES = [
 NODES_TO_WATCH = CORE_NODES + VISION_NODES + TELEOP_NODES + RECORDING_NODES
 
 MODULE_ORDER = [
-    ('core',            CORE_NODES),
-    ('vision',          VISION_NODES),
-    ('statemachine',    []),
-    ('motion planning', []),
-    ('driving',         []),
-    ('VLA',             []),
-    ('teleop',          TELEOP_NODES),
-    ('recording',       RECORDING_NODES),
+    ('Core',           CORE_NODES),
+    ('Vision',         VISION_NODES),
+    ('StateMachine',   []),
+    ('MotionPlanning', []),
+    ('Driving',        []),
+    ('VLA',            []),
+    ('Teleop',         TELEOP_NODES),
+    ('Recording',      RECORDING_NODES),
 ]
 
 REC_STATE_STYLE = {
@@ -205,6 +206,7 @@ class ScmGuiNode(Node):
         self._cli_ctrl_enable  = self.create_client(Trigger,             '/rby1/control_enable')
         self._cli_err_reset    = self.create_client(Trigger,             '/rby1/error_reset')
         self._cli_gripper_init = self.create_client(Trigger,             '/rby1/gripper_init')
+        self._cli_stream       = self.create_client(SetStream,           '/rby1/stream')
         self._cli_stop_move    = self.create_client(Trigger,             '/rby1/stop_move')
         self._cli_ctrl_mode    = self.create_client(SetControlMode,      '/rby1/ctrl/mode')
         self._cli_move_joint   = self.create_client(MoveToJointPosition, '/rby1/move_to_joint_position')
@@ -397,6 +399,11 @@ class ScmGuiNode(Node):
     def call_trigger(self, client, done_cb=None):
         self._call_async(client, Trigger.Request(), done_cb)
 
+    def call_stream(self, enable: bool, done_cb=None):
+        req = SetStream.Request()
+        req.enable = enable
+        self._call_async(self._cli_stream, req, done_cb)
+
     def call_set_use_torso(self, enable: bool, done_cb=None):
         req = SetBool.Request()
         req.data = enable
@@ -546,6 +553,7 @@ class TeleopGuiWindow(QWidget):
         left_col.setSpacing(6)
         left_col.setContentsMargins(0, 0, 0, 0)
         left_col.addWidget(self._build_rby1_group())
+        left_col.addWidget(self._build_ctrl_mode_group())
         left_col.addWidget(self._build_node_indicators_group())
         left_col.addWidget(self._build_teleop_group())
         left_col.addStretch()
@@ -599,9 +607,8 @@ class TeleopGuiWindow(QWidget):
         self._lbl_control = _make_status_label('Control')
         self._lbl_stream  = _make_status_label('Stream')
         self._lbl_gripper = _make_status_label('Gripper')
-        self._lbl_ctr_type = _make_status_label('Mode')
         for lbl in (self._lbl_power, self._lbl_servo, self._lbl_control,
-                    self._lbl_stream, self._lbl_gripper, self._lbl_ctr_type):
+                    self._lbl_stream, self._lbl_gripper):
             row.addWidget(lbl)
         return row
 
@@ -666,6 +673,9 @@ class TeleopGuiWindow(QWidget):
             lambda ok, _: self._update_lbl(self._lbl_control, 'Enabled',   _C_ON)      if ok else None), 0, 3)
         btn_grid.addWidget(self._make_btn_with_fb('Gripper Init', '#00838F',
             lambda cb: self._node.call_trigger(self._node._cli_gripper_init, done_cb=cb)), 0, 4)
+        btn_grid.addWidget(self._make_btn_with_fb('Stream On', '#00695C',
+            lambda cb: self._node.call_stream(True,  done_cb=cb),
+            lambda ok, _: self._update_lbl(self._lbl_stream, 'Stream On',  _C_ON)      if ok else None), 0, 5)
 
         # Row 1: off buttons directly below their on counterparts
         btn_grid.addWidget(self._make_btn_with_fb('Power Off', '#C62828',
@@ -676,6 +686,9 @@ class TeleopGuiWindow(QWidget):
             lambda ok, _: self._update_lbl(self._lbl_servo,   'Servo Off', _C_OFF_RED) if ok else None), 1, 2)
         btn_grid.addWidget(self._make_btn_with_fb('Err Reset',   '#F57C00',
             lambda cb: self._node.call_trigger(self._node._cli_err_reset,   done_cb=cb)), 1, 3)
+        btn_grid.addWidget(self._make_btn_with_fb('Stream Off', '#4E342E',
+            lambda cb: self._node.call_stream(False, done_cb=cb),
+            lambda ok, _: self._update_lbl(self._lbl_stream, 'Stream Off', _C_OFF_RED) if ok else None), 1, 5)
 
         row.addLayout(btn_grid)
         return row
@@ -869,7 +882,7 @@ class TeleopGuiWindow(QWidget):
     # ── Cartesian Impedance Params group ──────────────────────────────────
 
     def _build_cartesian_impedance_group(self) -> QGroupBox:
-        group = QGroupBox('Cartesian Impedance Params')
+        group = QGroupBox('Inverse Kinematic Params')
         top_layout = QVBoxLayout()
         top_layout.setSpacing(4)
         self._filling_imp_preset = False
@@ -1184,6 +1197,54 @@ class TeleopGuiWindow(QWidget):
         self._node.call_set_teleop_pose(positions, jnt_names)
         self._node.call_set_nullspace_joint_ref(positions, jnt_names, done_cb)
 
+    # ── Control Mode group ────────────────────────────────────────────────
+
+    def _build_ctrl_mode_group(self) -> QGroupBox:
+        group = QGroupBox('Control Mode')
+        hbox = QHBoxLayout()
+        hbox.setSpacing(12)
+
+        self._lbl_ctr_type = _make_status_label('Mode')
+        hbox.addWidget(self._lbl_ctr_type)
+
+        src_row = QHBoxLayout()
+        src_row.setSpacing(4)
+        src_row.addWidget(QLabel('Source:'))
+        self._rb_src_joint     = QRadioButton('Joint')
+        self._rb_src_cartesian = QRadioButton('Cartesian')
+        self._rb_src_cartesian.setChecked(True)
+        self._bg_src = QButtonGroup(self)
+        self._bg_src.addButton(self._rb_src_joint,     0)
+        self._bg_src.addButton(self._rb_src_cartesian, 1)
+        self._bg_src.idClicked.connect(self._on_ctrl_mode_changed)
+        src_row.addWidget(self._rb_src_joint)
+        src_row.addWidget(self._rb_src_cartesian)
+
+        ctrl_row = QHBoxLayout()
+        ctrl_row.setSpacing(4)
+        ctrl_row.addWidget(QLabel('Ctrl:'))
+        self._rb_ctrl_position  = QRadioButton('Position')
+        self._rb_ctrl_impedance = QRadioButton('Impedance')
+        self._rb_ctrl_impedance.setChecked(True)
+        self._bg_ctrl = QButtonGroup(self)
+        self._bg_ctrl.addButton(self._rb_ctrl_position,  0)
+        self._bg_ctrl.addButton(self._rb_ctrl_impedance, 1)
+        self._bg_ctrl.idClicked.connect(self._on_ctrl_mode_changed)
+        ctrl_row.addWidget(self._rb_ctrl_position)
+        ctrl_row.addWidget(self._rb_ctrl_impedance)
+
+        rows_widget = QWidget()
+        rows_vbox = QVBoxLayout(rows_widget)
+        rows_vbox.setSpacing(2)
+        rows_vbox.setContentsMargins(0, 0, 0, 0)
+        rows_vbox.addLayout(src_row)
+        rows_vbox.addLayout(ctrl_row)
+        hbox.addWidget(rows_widget)
+        hbox.addStretch()
+
+        group.setLayout(hbox)
+        return group
+
     # ── Node Indicators group ─────────────────────────────────────────────
 
     def _build_node_indicators_group(self) -> QGroupBox:
@@ -1313,34 +1374,6 @@ class TeleopGuiWindow(QWidget):
         vbox.addLayout(clutch_row)
 
         vbox.addSpacing(4)
-
-        ctrl_row = QHBoxLayout()
-        ctrl_row.addWidget(QLabel('Ctrl:'))
-        self._rb_ctrl_position  = QRadioButton('Position')
-        self._rb_ctrl_impedance = QRadioButton('Impedance')
-        self._rb_ctrl_impedance.setChecked(True)
-        self._bg_ctrl = QButtonGroup()
-        self._bg_ctrl.addButton(self._rb_ctrl_position,  0)
-        self._bg_ctrl.addButton(self._rb_ctrl_impedance, 1)
-        self._bg_ctrl.idClicked.connect(self._on_ctrl_mode_changed)
-        ctrl_row.addWidget(self._rb_ctrl_position)
-        ctrl_row.addWidget(self._rb_ctrl_impedance)
-        ctrl_row.addStretch()
-        vbox.addLayout(ctrl_row)
-
-        src_row = QHBoxLayout()
-        src_row.addWidget(QLabel('Src:'))
-        self._rb_src_joint     = QRadioButton('Joint')
-        self._rb_src_cartesian = QRadioButton('Cartesian')
-        self._rb_src_cartesian.setChecked(True)
-        self._bg_src = QButtonGroup()
-        self._bg_src.addButton(self._rb_src_joint,     0)
-        self._bg_src.addButton(self._rb_src_cartesian, 1)
-        self._bg_src.idClicked.connect(self._on_ctrl_mode_changed)
-        src_row.addWidget(self._rb_src_joint)
-        src_row.addWidget(self._rb_src_cartesian)
-        src_row.addStretch()
-        vbox.addLayout(src_row)
 
         mirror_row = QHBoxLayout()
         mirror_row.addWidget(QLabel('Tracking'))
@@ -1540,6 +1573,7 @@ class TeleopGuiWindow(QWidget):
 
         if stream != self._stream_on:
             self._stream_on = stream
+        self._chk_use_torso.setEnabled(not stream)
 
         if ctrl == 'State.Enabled':
             _set(self._lbl_control, 'Enabled', _C_ON)
