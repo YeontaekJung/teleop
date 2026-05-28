@@ -15,6 +15,7 @@ import time
 
 import rclpy
 from rclpy.node import Node
+from geometry_msgs.msg import Twist
 from sensor_msgs.msg import Joy, JointState
 from std_msgs.msg import Int32, String
 from std_srvs.srv import SetBool, Trigger
@@ -37,11 +38,21 @@ from PySide6.QtWidgets import (
     QGroupBox, QLabel, QPushButton, QProgressBar, QGridLayout,
     QRadioButton, QButtonGroup, QSpinBox, QDoubleSpinBox, QLineEdit,
     QCheckBox, QComboBox, QInputDialog, QMessageBox, QScrollArea,
+    QSizePolicy,
 )
 from PySide6.QtCore import Qt, QTimer, Signal, QObject
 from PySide6.QtGui import QFont
 
 CALIB_DURATION = 4.0  # seconds per phase — must match manus_inspire
+
+_DRIVE_BTN_DEFAULT = (
+    'background-color: #e0e0e0; border-radius: 6px;'
+    ' font-size: 13px; color: #333333;'
+)
+_DRIVE_BTN_PRESSED = (
+    'background-color: #4fc3f7; border-radius: 6px;'
+    ' font-size: 13px; font-weight: bold; color: #000000;'
+)
 
 BODY_JOINT_NAMES = [
     'torso_0', 'torso_1', 'torso_2', 'torso_3', 'torso_4', 'torso_5',
@@ -179,6 +190,7 @@ class ScmGuiNode(Node):
 
     def __init__(self):
         super().__init__('scm_gui')
+        self.declare_parameter('teleop_panel_expanded', False)
         self._pedal_state         = [0, 0, 0]
         self._pedal_cbs           = []
         self._node_status_cbs     = []
@@ -226,6 +238,7 @@ class ScmGuiNode(Node):
 
         self._pub_task_id   = self.create_publisher(Int32,  '/teleop/task_id',    10)
         self._pub_mirror    = self.create_publisher(String, '/teleop/mirror_mode', 10)
+        self._pub_base_vel  = self.create_publisher(Twist,  '/rby1/cmd/base_vel',  2)
 
     # ── callbacks ──────────────────────────────────────────────────────────
 
@@ -390,10 +403,12 @@ class ScmGuiNode(Node):
         req.enable = enable
         self._call_async(self._cli_power, req, done_cb)
 
-    def call_servo(self, enable: bool, no_wheel: bool = False, done_cb=None):
+    def call_servo(self, enable: bool, no_wheel: bool = False,
+                   wheel_only: bool = False, done_cb=None):
         req = SetServo.Request()
-        req.enable = enable
-        req.no_wheel = no_wheel
+        req.enable     = enable
+        req.no_wheel   = no_wheel
+        req.wheel_only = wheel_only
         self._call_async(self._cli_servo, req, done_cb)
 
     def call_trigger(self, client, done_cb=None):
@@ -455,6 +470,53 @@ class ScmGuiNode(Node):
         req.target.position = [float(v) for v in positions]
         self._call_async(self._cli_set_ns_ref, req, done_cb)
 
+    # ── Mobile base ────────────────────────────────────────────────────────
+
+    def publish_base_vel(self, vx: float, vy: float, yaw: float):
+        msg = Twist()
+        msg.linear.x  = vx
+        msg.linear.y  = vy
+        msg.angular.z = yaw
+        self._pub_base_vel.publish(msg)
+
+    def set_mobility_accel(self, linear: float, angular: float, done_cb=None):
+        def _run():
+            try:
+                if not self._cli_set_param.wait_for_service(timeout_sec=2.0):
+                    if done_cb:
+                        done_cb(False, 'param service not available')
+                    return
+                def _make_param(name, val):
+                    pv = ParameterValue()
+                    pv.type = ParameterType.PARAMETER_DOUBLE
+                    pv.double_value = val
+                    p = RosParameter()
+                    p.name  = name
+                    p.value = pv
+                    return p
+                req = SetParameters.Request()
+                req.parameters = [
+                    _make_param('mobility.accel_limit_linear',  linear),
+                    _make_param('mobility.accel_limit_angular', angular),
+                ]
+                future = self._cli_set_param.call_async(req)
+                deadline = time.monotonic() + 5.0
+                while not future.done():
+                    if time.monotonic() > deadline:
+                        if done_cb:
+                            done_cb(False, 'timeout')
+                        return
+                    time.sleep(0.02)
+                res = future.result()
+                ok = all(r.successful for r in res.results)
+                reason = next((r.reason for r in res.results if not r.successful), '')
+                if done_cb:
+                    done_cb(ok, reason)
+            except Exception as e:
+                if done_cb:
+                    done_cb(False, str(e))
+        threading.Thread(target=_run, daemon=True).start()
+
 
 # ---------------------------------------------------------------------------
 # Qt signals bridge
@@ -502,6 +564,53 @@ def _make_btn(text: str, color: str, text_color: str = 'white',
 
 
 # ---------------------------------------------------------------------------
+# Collapsible section widget
+# ---------------------------------------------------------------------------
+
+class CollapsibleSection(QWidget):
+    def __init__(self, title: str, expanded: bool = True, parent=None):
+        super().__init__(parent)
+        self._title = title
+        layout = QVBoxLayout(self)
+        layout.setSpacing(0)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        self._btn = QPushButton()
+        self._btn.setCheckable(True)
+        self._btn.setChecked(expanded)
+        self._btn.setStyleSheet('text-align: left; padding: 3px 8px; font-weight: bold;')
+        self._btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._btn.toggled.connect(self._on_toggled)
+
+        self._body = QWidget()
+        self._body.setVisible(expanded)
+
+        layout.addWidget(self._btn)
+        layout.addWidget(self._body)
+        self._update_btn()
+
+    def _update_btn(self):
+        arrow = '▼' if self._btn.isChecked() else '▶'
+        self._btn.setText(f'{arrow}  {self._title}')
+
+    def _on_toggled(self, checked: bool):
+        self._body.setVisible(checked)
+        self._update_btn()
+        self.setMaximumHeight(16777215 if checked else self._btn.sizeHint().height())
+        win = self.window()
+        def _do_resize():
+            win.setMinimumHeight(0)
+            win.adjustSize()
+        QTimer.singleShot(0, _do_resize)
+
+    def set_body_widget(self, widget: QWidget):
+        body_layout = QVBoxLayout(self._body)
+        body_layout.setContentsMargins(0, 2, 0, 0)
+        body_layout.setSpacing(0)
+        body_layout.addWidget(widget)
+
+
+# ---------------------------------------------------------------------------
 # Main window
 # ---------------------------------------------------------------------------
 
@@ -535,9 +644,24 @@ class TeleopGuiWindow(QWidget):
 
         self._joint_limits = {}
 
+        self._held_keys: set = set()
+        self._key_btns: dict = {}
+
+        self._drive_timer = QTimer(self)
+        self._drive_timer.setInterval(100)  # 10 Hz
+        self._drive_timer.timeout.connect(self._on_drive_tick)
+        self._drive_timer.start()
+
         self._build_ui()
 
     # ── UI construction ────────────────────────────────────────────────────
+
+    def _wrap_collapsible(self, group_box: QGroupBox, expanded: bool = True) -> CollapsibleSection:
+        title = group_box.title()
+        group_box.setTitle('')
+        section = CollapsibleSection(title, expanded=expanded)
+        section.set_body_widget(group_box)
+        return section
 
     def _build_ui(self):
         self.setWindowTitle('SCM Control')
@@ -553,8 +677,12 @@ class TeleopGuiWindow(QWidget):
         left_col.setSpacing(6)
         left_col.setContentsMargins(0, 0, 0, 0)
         left_col.addWidget(self._build_rby1_group())
-        left_col.addWidget(self._build_node_indicators_group())
-        left_col.addWidget(self._build_teleop_group())
+        left_col.addWidget(self._wrap_collapsible(self._build_node_indicators_group()))
+        ctrl_base_row = QHBoxLayout()
+        ctrl_base_row.setSpacing(6)
+        ctrl_base_row.addWidget(self._wrap_collapsible(self._build_ctrl_mode_group()), 1)
+        ctrl_base_row.addWidget(self._wrap_collapsible(self._build_mobile_base_panel()), 4)
+        left_col.addLayout(ctrl_base_row)
         left_col.addStretch()
 
         right_widget = QWidget()
@@ -562,9 +690,10 @@ class TeleopGuiWindow(QWidget):
         right_col = QVBoxLayout(right_widget)
         right_col.setSpacing(6)
         right_col.setContentsMargins(0, 0, 0, 0)
-        right_col.addWidget(self._build_ctrl_mode_group())
-        right_col.addWidget(self._build_joint_position_group())
-        right_col.addWidget(self._build_cartesian_impedance_group())
+        right_col.addWidget(self._wrap_collapsible(self._build_joint_position_group()))
+        right_col.addWidget(self._wrap_collapsible(self._build_cartesian_impedance_group()))
+        _teleop_expanded = self._node.get_parameter('teleop_panel_expanded').value
+        right_col.addWidget(self._wrap_collapsible(self._build_teleop_group(), expanded=_teleop_expanded))
         right_col.addStretch()
 
         root.addWidget(left_widget, stretch=1)
@@ -604,10 +733,11 @@ class TeleopGuiWindow(QWidget):
         row.setSpacing(6)
         self._lbl_power   = _make_status_label('Power')
         self._lbl_servo   = _make_status_label('Servo')
-        self._lbl_control = _make_status_label('Control')
+        self._lbl_control = _make_status_label('Ctrl')
+        self._lbl_mobile  = _make_status_label('Mobile')
         self._lbl_gripper = _make_status_label('Gripper')
         for lbl in (self._lbl_power, self._lbl_servo, self._lbl_control,
-                    self._lbl_gripper):
+                    self._lbl_mobile, self._lbl_gripper):
             row.addWidget(lbl)
         return row
 
@@ -665,23 +795,29 @@ class TeleopGuiWindow(QWidget):
             lambda cb: self._node.call_power(True,  done_cb=cb),
             lambda ok, _: self._update_lbl(self._lbl_power,   'Power On',  _C_ON)      if ok else None), 0, 1)
         btn_grid.addWidget(self._make_btn_with_fb('Servo On',  '#1976D2',
-            lambda cb: self._node.call_servo(True,  done_cb=cb),
+            lambda cb: self._node.call_servo(True,  no_wheel=True, done_cb=cb),
             lambda ok, _: self._update_lbl(self._lbl_servo,   'Servo On',  _C_ON)      if ok else None), 0, 2)
         btn_grid.addWidget(self._make_btn_with_fb('Ctrl Enable', '#7B1FA2',
             lambda cb: self._node.call_trigger(self._node._cli_ctrl_enable, done_cb=cb),
-            lambda ok, _: self._update_lbl(self._lbl_control, 'Enabled',   _C_ON)      if ok else None), 0, 3)
+            lambda ok, _: self._update_lbl(self._lbl_control, 'Ctrl Enabled', _C_ON)   if ok else None), 0, 3)
+        btn_grid.addWidget(self._make_btn_with_fb('Mobile On',  '#00796B',
+            lambda cb: self._node.call_servo(True,  wheel_only=True, done_cb=cb),
+            lambda ok, _: self._update_lbl(self._lbl_mobile,  'Mobile On', _C_ON)      if ok else None), 0, 4)
         btn_grid.addWidget(self._make_btn_with_fb('Gripper Init', '#00838F',
-            lambda cb: self._node.call_trigger(self._node._cli_gripper_init, done_cb=cb)), 0, 4)
+            lambda cb: self._node.call_trigger(self._node._cli_gripper_init, done_cb=cb)), 0, 5)
 
         # Row 1: off buttons directly below their on counterparts
         btn_grid.addWidget(self._make_btn_with_fb('Power Off', '#C62828',
             lambda cb: self._node.call_power(False, done_cb=cb),
             lambda ok, _: self._update_lbl(self._lbl_power,   'Power Off', _C_OFF_RED) if ok else None), 1, 1)
         btn_grid.addWidget(self._make_btn_with_fb('Servo Off', '#5C6BC0',
-            lambda cb: self._node.call_servo(False, done_cb=cb),
+            lambda cb: self._node.call_servo(False, no_wheel=True, done_cb=cb),
             lambda ok, _: self._update_lbl(self._lbl_servo,   'Servo Off', _C_OFF_RED) if ok else None), 1, 2)
         btn_grid.addWidget(self._make_btn_with_fb('Err Reset',   '#F57C00',
             lambda cb: self._node.call_trigger(self._node._cli_err_reset,   done_cb=cb)), 1, 3)
+        btn_grid.addWidget(self._make_btn_with_fb('Mobile Off', '#004D40',
+            lambda cb: self._node.call_servo(False, wheel_only=True, done_cb=cb),
+            lambda ok, _: self._update_lbl(self._lbl_mobile,  'Mobile Off', _C_OFF_RED) if ok else None), 1, 4)
 
         row.addLayout(btn_grid)
         return row
@@ -1194,14 +1330,11 @@ class TeleopGuiWindow(QWidget):
 
     def _build_ctrl_mode_group(self) -> QGroupBox:
         group = QGroupBox('Control Mode Manager')
-        hbox = QHBoxLayout()
-        hbox.setSpacing(16)
+        vbox = QVBoxLayout()
+        vbox.setSpacing(4)
 
-        # Current mode indicator
         self._lbl_ctr_type = _make_status_label('Mode')
-        hbox.addWidget(self._lbl_ctr_type)
 
-        # Source and Ctrl radio buttons
         src_row = QHBoxLayout()
         src_row.setSpacing(4)
         src_row.addWidget(QLabel('Source:'))
@@ -1228,15 +1361,6 @@ class TeleopGuiWindow(QWidget):
         ctrl_row.addWidget(self._rb_ctrl_position)
         ctrl_row.addWidget(self._rb_ctrl_impedance)
 
-        rows_widget = QWidget()
-        rows_vbox = QVBoxLayout(rows_widget)
-        rows_vbox.setSpacing(2)
-        rows_vbox.setContentsMargins(0, 0, 0, 0)
-        rows_vbox.addLayout(src_row)
-        rows_vbox.addLayout(ctrl_row)
-        hbox.addWidget(rows_widget)
-
-        # Stream indicator + On/Off buttons
         self._lbl_stream = _make_status_label('Stream')
         self._btn_stream_on  = _make_btn('On',  '#2E7D32', height=30)
         self._btn_stream_off = _make_btn('Off', '#C62828', height=30)
@@ -1244,12 +1368,20 @@ class TeleopGuiWindow(QWidget):
         self._btn_stream_off.setFixedWidth(50)
         self._btn_stream_on.clicked.connect(self._on_stream_on)
         self._btn_stream_off.clicked.connect(self._on_stream_off)
-        hbox.addWidget(self._lbl_stream)
-        hbox.addWidget(self._btn_stream_on)
-        hbox.addWidget(self._btn_stream_off)
-        hbox.addStretch()
 
-        group.setLayout(hbox)
+        stream_row = QHBoxLayout()
+        stream_row.setSpacing(6)
+        stream_row.addWidget(self._lbl_stream)
+        stream_row.addWidget(self._btn_stream_on)
+        stream_row.addWidget(self._btn_stream_off)
+        stream_row.addStretch()
+
+        vbox.addWidget(self._lbl_ctr_type)
+        vbox.addLayout(src_row)
+        vbox.addLayout(ctrl_row)
+        vbox.addLayout(stream_row)
+
+        group.setLayout(vbox)
         return group
 
     # ── Node Indicators group ─────────────────────────────────────────────
@@ -1285,6 +1417,156 @@ class TeleopGuiWindow(QWidget):
 
         group.setLayout(grid)
         return group
+
+    # ── Mobile Base Panel ──────────────────────────────────────────────────
+
+    def _build_mobile_base_panel(self) -> QGroupBox:
+        outer = QGroupBox('Mobile Base Panel')
+        outer_hbox = QHBoxLayout(outer)
+        outer_hbox.setSpacing(6)
+
+        # ── Manual Driving (Keyboard) ──
+        drv_group = QGroupBox('Manual Driving (Keyboard)')
+        drv_vbox  = QVBoxLayout(drv_group)
+        drv_vbox.setSpacing(6)
+
+        # Enable 체크박스 (키보드 위)
+        self._chk_drive = QCheckBox('Enable keyboard drive')
+        self._chk_drive.toggled.connect(self._on_drive_enable_toggled)
+        drv_vbox.addWidget(self._chk_drive)
+
+        # 키 버튼 그리드 (가운데)
+        key_specs = [
+            (0, 0, Qt.Key.Key_Q, '↺\nQ'),
+            (0, 1, Qt.Key.Key_W, '↑\nW'),
+            (0, 2, Qt.Key.Key_E, '↻\nE'),
+            (1, 0, Qt.Key.Key_A, '←\nA'),
+            (1, 1, Qt.Key.Key_S, '↓\nS'),
+            (1, 2, Qt.Key.Key_D, '→\nD'),
+        ]
+        key_grid = QGridLayout()
+        key_grid.setSpacing(4)
+        for row, col, key, label in key_specs:
+            btn = QPushButton(label)
+            btn.setFixedSize(55, 50)
+            btn.setStyleSheet(_DRIVE_BTN_DEFAULT)
+            btn.setEnabled(False)   # visual only — keyboard drives state
+            key_grid.addWidget(btn, row, col)
+            self._key_btns[key] = btn
+        key_grid_widget = QWidget()
+        key_grid_widget.setLayout(key_grid)
+        drv_vbox.addWidget(key_grid_widget)
+
+        # 속도 입력 (키보드 아래)
+        vel_vbox = QVBoxLayout()
+        vel_vbox.setSpacing(4)
+
+        form_lin = QHBoxLayout()
+        form_lin.setSpacing(4)
+        form_lin.addWidget(QLabel('Linear Velocity [m/s]'))
+        self._spn_lin = QDoubleSpinBox()
+        self._spn_lin.setRange(0.01, 2.0)
+        self._spn_lin.setSingleStep(0.05)
+        self._spn_lin.setValue(0.3)
+        self._spn_lin.setDecimals(2)
+        form_lin.addWidget(self._spn_lin)
+
+        form_ang = QHBoxLayout()
+        form_ang.setSpacing(4)
+        form_ang.addWidget(QLabel('Angular Velocity [rad/s]'))
+        self._spn_ang = QDoubleSpinBox()
+        self._spn_ang.setRange(0.01, 3.14)
+        self._spn_ang.setSingleStep(0.05)
+        self._spn_ang.setValue(0.3)
+        self._spn_ang.setDecimals(2)
+        form_ang.addWidget(self._spn_ang)
+
+        vel_vbox.addLayout(form_lin)
+        vel_vbox.addLayout(form_ang)
+        drv_vbox.addLayout(vel_vbox)
+        outer_hbox.addWidget(drv_group)
+
+        # ── Driving Parameter Manager ──
+        param_group = QGroupBox('Driving Parameter Manager')
+        param_vbox  = QVBoxLayout(param_group)
+        param_vbox.setSpacing(6)
+
+        row_alin = QHBoxLayout()
+        row_alin.addWidget(QLabel('Linear Acc. Limit [m/s²]'))
+        self._spn_alin = QDoubleSpinBox()
+        self._spn_alin.setRange(0.1, 50.0)
+        self._spn_alin.setSingleStep(0.5)
+        self._spn_alin.setValue(10.0)
+        self._spn_alin.setDecimals(1)
+        row_alin.addWidget(self._spn_alin)
+        param_vbox.addLayout(row_alin)
+
+        row_aang = QHBoxLayout()
+        row_aang.addWidget(QLabel('Angular Acc. Limit [rad/s²]'))
+        self._spn_aang = QDoubleSpinBox()
+        self._spn_aang.setRange(0.1, 50.0)
+        self._spn_aang.setSingleStep(0.5)
+        self._spn_aang.setValue(10.0)
+        self._spn_aang.setDecimals(1)
+        row_aang.addWidget(self._spn_aang)
+        param_vbox.addLayout(row_aang)
+
+        btn_apply = QPushButton('Apply')
+        btn_apply.setFixedHeight(28)
+        btn_apply.clicked.connect(self._on_accel_apply)
+        param_vbox.addWidget(btn_apply)
+        param_vbox.addStretch()
+
+        outer_hbox.addWidget(param_group)
+
+        return outer
+
+    # ── Keyboard drive handlers ────────────────────────────────────────────
+
+    def keyPressEvent(self, event):
+        if not event.isAutoRepeat():
+            k = event.key()
+            self._held_keys.add(k)
+            if k in self._key_btns:
+                self._key_btns[k].setStyleSheet(_DRIVE_BTN_PRESSED)
+        super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event):
+        if not event.isAutoRepeat():
+            k = event.key()
+            self._held_keys.discard(k)
+            if k in self._key_btns:
+                self._key_btns[k].setStyleSheet(_DRIVE_BTN_DEFAULT)
+        super().keyReleaseEvent(event)
+
+    def _on_drive_tick(self):
+        if not hasattr(self, '_chk_drive') or not self._chk_drive.isChecked():
+            return
+        keys = self._held_keys
+        lin  = self._spn_lin.value()
+        ang  = self._spn_ang.value()
+        vx  = (lin if Qt.Key.Key_W in keys else 0.0) \
+            - (lin if Qt.Key.Key_S in keys else 0.0)
+        vy  = (lin if Qt.Key.Key_A in keys else 0.0) \
+            - (lin if Qt.Key.Key_D in keys else 0.0)
+        yaw = (ang if Qt.Key.Key_E in keys else 0.0) \
+            - (ang if Qt.Key.Key_Q in keys else 0.0)
+        self._node.publish_base_vel(vx, vy, yaw)
+
+    def _on_drive_enable_toggled(self, checked: bool):
+        if not checked:
+            self._node.publish_base_vel(0.0, 0.0, 0.0)
+            for btn in self._key_btns.values():
+                btn.setStyleSheet(_DRIVE_BTN_DEFAULT)
+            self._held_keys.clear()
+
+    def _on_accel_apply(self):
+        lin = self._spn_alin.value()
+        ang = self._spn_aang.value()
+        self._node.set_mobility_accel(
+            lin, ang,
+            done_cb=lambda ok, msg: self._sig.service_result.emit(
+                ok, f'Accel set failed: {msg}' if not ok else ''))
 
     # ── Teleop group ───────────────────────────────────────────────────────
 
@@ -1583,11 +1865,11 @@ class TeleopGuiWindow(QWidget):
         self._chk_use_torso.setEnabled(not stream)
 
         if ctrl == 'State.Enabled':
-            _set(self._lbl_control, 'Enabled', _C_ON)
+            _set(self._lbl_control, 'Ctrl Enabled', _C_ON)
         elif 'Fault' in ctrl:
-            _set(self._lbl_control, 'FAULT', _C_FAULT)
+            _set(self._lbl_control, 'Ctrl FAULT', _C_FAULT)
         else:
-            _set(self._lbl_control, 'Idle', _C_OFF)
+            _set(self._lbl_control, 'Ctrl Idle', _C_OFF)
 
     def _on_pedal(self, state: list):
         for i, (btn, pressed) in enumerate(zip(self._btn_pedals, state)):

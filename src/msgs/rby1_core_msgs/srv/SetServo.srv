@@ -1,5 +1,6 @@
 bool enable
 bool no_wheel
+bool wheel_only
 ---
 bool success
 string message

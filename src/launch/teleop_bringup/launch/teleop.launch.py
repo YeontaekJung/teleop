@@ -130,6 +130,7 @@ def generate_launch_description():
             executable='scm_gui_node',
             name='scm_gui',
             output='screen',
+            parameters=[{'teleop_panel_expanded': True}],
         ),
 
     ])

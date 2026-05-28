@@ -1,5 +1,32 @@
 # CHANGES
 
+## 2026-05-29
+
+### scm_gui: Servo On/Off 분리 — body only / Mobile On/Off 버튼 추가
+
+- **배경:** 기존 Servo On/Off는 torso·arm·wheel을 모두 제어해 의도치 않게 모바일 베이스도 함께 켜졌음. 주행 활성화를 body servo와 분리해 안전하게 운용할 수 있게 함.
+- **변경 (`scm_gui/scm_gui_node.py`):**
+  - `ScmGuiNode.call_servo()`에 `wheel_only` 파라미터 추가 → `SetServo.Request.wheel_only` 전달.
+  - **Servo On/Off** 버튼: `no_wheel=True` 로 호출 변경 — torso·right_arm·left_arm joints 만 제어.
+  - **Mobile On/Off** 버튼 신규 추가 (Ctrl Enable 오른쪽, 위아래 배치): `wheel_only=True` 로 호출 — wheel joints 만 제어.
+  - **Gripper Init** 버튼: 열 4 → 열 5로 이동 (Mobile On이 열 4를 점유).
+  - **상태 표시줄** `_build_status_row()`: `'Control'` 레이블을 `'Ctrl'`로 변경, `Mobile` indicator 신규 추가 (Ctrl Enabled와 Gripper 사이).
+  - `_on_rby1_status()`: control_state 표시 텍스트를 `'Ctrl Enabled'`/`'Ctrl FAULT'`/`'Ctrl Idle'`로 변경.
+
+## 2026-05-28
+
+### scm_gui: Mobile Base Panel 추가 — 키보드 수동 주행
+
+- **배경:** GUI에서 로봇 주행을 직접 조작할 수단이 없었음. hw-core의 `/rby1/cmd/base_vel` (`geometry_msgs/Twist`) 토픽을 활용.
+- **변경 (`scm_gui/scm_gui_node.py`):**
+  - `geometry_msgs/Twist` 퍼블리셔 (`/rby1/cmd/base_vel`) 추가.
+  - `ScmGuiNode.publish_base_vel(vx, vy, yaw)` 및 `set_mobility_accel(linear, angular)` 메서드 추가.
+  - **Mobile Base Panel** 그룹을 ROS2 Node Status 오른쪽(2:1 비율)에 배치:
+    - **Manual Driving (Keyboard)** 서브그룹: Enable 체크박스, QWEASD 키 버튼(눌림 시 파란색 하이라이트), Linear/Angular 속도 입력 스핀박스.
+    - **Driving Parameter Manager** 서브그룹: `accel_limit_linear` / `accel_limit_angular` 입력 + Apply 버튼 (hw-core 파라미터 서비스로 런타임 변경).
+  - 키 매핑: W=전진, S=후진, A=좌측 스트레이프, D=우측 스트레이프, Q=좌회전, E=우회전.
+  - Model A에서 A/D 키는 SDK가 자동으로 Y 성분 무시 — GUI 필터링 불필요.
+
 ## 2026-05-27
 
 ### `/rby1/cmd/pose` 메시지 타입 교체: `rby1_core_msgs/LinkPoseCommand` → `tf2_msgs/TFMessage` (데이터용)
