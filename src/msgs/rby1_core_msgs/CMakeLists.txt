@@ -13,7 +13,6 @@ find_package(sensor_msgs REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
-  "msg/LinkPoseCommand.msg"
   "srv/ConnectRobot.srv"
   "srv/MoveToJointPosition.srv"
   "srv/SetControlMode.srv"

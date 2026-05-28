@@ -49,7 +49,7 @@ A GUI node (`scm_gui`, executable `scm_gui_node`) provides live system status (C
 
 | Topic | Type | Description |
 |-------|------|-------------|
-| `/rby1/cmd/pose` | `rby1_core_msgs/LinkPoseCommand` | sdk_position / sdk_impedance EE target (C++ 프로덕션 노드) |
+| `/rby1/cmd/pose` | `tf2_msgs/TFMessage` (데이터용; TF 브로드캐스트 아님) | sdk_position / sdk_impedance EE target (C++ 프로덕션 노드). `transforms[].child_frame_id`에 `ee_right` / `ee_left` (+ 옵션 `link_torso_5`) |
 | `/rby1/cmd/joint` | `sensor_msgs/JointState` | pink_position / pink_impedance joint 명령 (Python 디버그 노드만) |
 | `/teleop/rec_state` | `std_msgs/String` | 녹화 상태 (IDLE / ARMING / READY / RECORDING / PAUSED) |
 | `/teleop/rec_episode` | `std_msgs/Int32` | 현재 에피소드 번호 |
@@ -322,7 +322,7 @@ ros2 run scm_gui scm_gui_node
 | `manus_ros2_msgs` | msgs | Manus glove message types |
 | `inspire_hand_msgs` | msgs | Inspire hand message types |
 | `scm_recording_msgs` | msgs | Recording core service definitions |
-| `rby1_core_msgs` | msgs | RB-Y1 core srv/msg definitions (10 lifecycle services + 3 runtime tuning services + `LinkPoseCommand`) |
+| `rby1_core_msgs` | msgs | RB-Y1 core srv 정의 (10 lifecycle services + 3 runtime tuning services). 포즈 명령은 `tf2_msgs/TFMessage`로 일원화. |
 | `manus_inspire` | core | Manus glove data → Inspire hand commands + 4-phase calibration |
 | `rby1_ik` | core | Legacy Python IK helper kept for debug/experiments (consumed only by `vive_rby1_debug_node`) |
 | `vive_rby1` | core | Tracker delta → RB-Y1 joint/pose commands, recording state machine, body-tracker → torso |

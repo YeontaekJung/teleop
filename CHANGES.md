@@ -1,5 +1,24 @@
 # CHANGES
 
+## 2026-05-27
+
+### `/rby1/cmd/pose` 메시지 타입 교체: `rby1_core_msgs/LinkPoseCommand` → `tf2_msgs/TFMessage` (데이터용)
+
+- **요지:** hw-core 인터페이스 변경에 맞춰 teleop publisher를 일괄 마이그레이션. `tf2_msgs/TFMessage`를 일반 데이터 메시지로 발행 — 토픽 이름이 `/tf*`가 아니므로 TF subsystem과 충돌 없음.
+- **새 메시지 규약 (publisher 측):**
+  - `transforms[]` 각 항목의 `child_frame_id` 가 타깃 링크: `"ee_right"`, `"ee_left"`, 옵션 `"link_torso_5"`.
+  - `header.frame_id = "base"`, `header.stamp` 는 publish 시점(모든 항목 동일 stamp).
+  - `transform.translation`/`rotation` 으로 6-DOF 포즈. SE3 → Transform 변환은 회전행렬→쿼터니언 1회 + 7 double 복사로 기존 SE3→Pose와 동일 비용 (100Hz 부담 없음).
+  - 가변 길이: warmup/메인 루프 모두 `ee_right`, `ee_left` 먼저, `use_torso_` 시 `link_torso_5` append.
+- **변경 파일:**
+  - `src/msgs/rby1_core_msgs/msg/LinkPoseCommand.msg` 삭제 + `CMakeLists.txt`에서 제거 (hw-core 사본과 동기화).
+  - `src/core/vive_rby1/src/vive_rby1_node.cpp` — include/publisher 타입/메시지 빌드 교체. `poseToTransform`, `makeTransformStamped`, `se3ToTransformStamped` 헬퍼 추가.
+  - `src/core/vive_rby1/vive_rby1/vive_rby1_node.py` (debug 노드) — import/publisher/메시지 빌드 교체. `se3_to_transform`, `make_transform_stamped` 헬퍼 추가. 기존 `msg.header.*` 데드코드는 자연스럽게 제거(TFMessage엔 top-level header 없음).
+  - `src/core/vive_rby1/CMakeLists.txt`, `package.xml` — `tf2_msgs` 의존 추가.
+  - `README.md` — 토픽 표 갱신.
+- **외부 통합자 영향:** `/rby1/cmd/pose`를 직접 구독하던 외부 모듈은 `tf2_msgs/TFMessage` 로 마이그레이션 필요. hw-core 측 동등 변경([hw-core CHANGES.md 2026-05-27](../hw-core/CHANGES.md)) 참고.
+- **검증:** `cd teleop && colcon build --packages-up-to rby1_core_msgs vive_rby1`. 런타임: `ros2 topic echo /rby1/cmd/pose --once`로 `transforms[].child_frame_id` 가 `ee_right`/`ee_left` (+ torso 활성 시 `link_torso_5`) 확인. `ros2 topic echo /tf --once`로 본 메시지가 TF에 누설되지 않음 확인.
+
 ## 2026-05-22 (3)
 
 ### GUI — Impedance Preset에 Nullspace Ref Pose 통합, Teleop Pose dropdown 제거

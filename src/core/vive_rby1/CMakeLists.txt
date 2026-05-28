@@ -15,6 +15,7 @@ find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(rby1_core_msgs REQUIRED)
 find_package(scm_recording_msgs REQUIRED)
+find_package(tf2_msgs REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(pinocchio REQUIRED)
 
@@ -41,6 +42,7 @@ ament_target_dependencies(vive_rby1_node
   std_srvs
   rby1_core_msgs
   scm_recording_msgs
+  tf2_msgs
 )
 
 ament_python_install_package(${PROJECT_NAME})

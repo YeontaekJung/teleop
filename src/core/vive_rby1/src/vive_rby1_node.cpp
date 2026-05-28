@@ -24,7 +24,8 @@
 #include "geometry_msgs/msg/pose.hpp"
 #include "geometry_msgs/msg/pose_array.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
-#include "rby1_core_msgs/msg/link_pose_command.hpp"
+#include "geometry_msgs/msg/transform_stamped.hpp"
+#include "tf2_msgs/msg/tf_message.hpp"
 #include "rby1_core_msgs/srv/set_control_mode.hpp"
 #include "pinocchio/algorithm/frames.hpp"
 #include "pinocchio/algorithm/jacobian.hpp"
@@ -99,6 +100,34 @@ geometry_msgs::msg::Pose se3ToPose(const pinocchio::SE3 & se3) {
   pose.orientation.z = quat.z();
   pose.orientation.w = quat.w();
   return pose;
+}
+
+geometry_msgs::msg::Transform poseToTransform(const geometry_msgs::msg::Pose & p) {
+  geometry_msgs::msg::Transform t;
+  t.translation.x = p.position.x;
+  t.translation.y = p.position.y;
+  t.translation.z = p.position.z;
+  t.rotation      = p.orientation;
+  return t;
+}
+
+geometry_msgs::msg::TransformStamped makeTransformStamped(
+    const std::string & child_frame_id,
+    const geometry_msgs::msg::Transform & tf,
+    const rclcpp::Time & stamp) {
+  geometry_msgs::msg::TransformStamped ts;
+  ts.header.stamp    = stamp;
+  ts.header.frame_id = "base";
+  ts.child_frame_id  = child_frame_id;
+  ts.transform       = tf;
+  return ts;
+}
+
+geometry_msgs::msg::TransformStamped se3ToTransformStamped(
+    const std::string & child_frame_id,
+    const pinocchio::SE3 & se3,
+    const rclcpp::Time & stamp) {
+  return makeTransformStamped(child_frame_id, poseToTransform(se3ToPose(se3)), stamp);
 }
 
 bool isFinite(const pinocchio::SE3 & se3) {
@@ -316,7 +345,10 @@ class ViveRby1Node : public rclcpp::Node {
       "/vive_rby1/set_use_torso",
       std::bind(&ViveRby1Node::onSetUseTorso, this, std::placeholders::_1, std::placeholders::_2));
 
-    pub_pose_cmd_ = create_publisher<rby1_core_msgs::msg::LinkPoseCommand>("/rby1/cmd/pose", stream_qos);
+    // /rby1/cmd/pose carries tf2_msgs/TFMessage used as plain data (NOT a TF
+    // broadcast). Each TransformStamped names a target link via child_frame_id:
+    // "ee_right", "ee_left", and optionally "link_torso_5".
+    pub_pose_cmd_ = create_publisher<tf2_msgs::msg::TFMessage>("/rby1/cmd/pose", stream_qos);
     // ── EE Pose → warmup hold ──────────────────────────────────────────
     sub_ee_pose_ = create_subscription<geometry_msgs::msg::PoseArray>(
       "/rby1/state/ee_pose", stream_qos,
@@ -892,10 +924,13 @@ class ViveRby1Node : public rclcpp::Node {
     if (warmup_ticks_ > 0) {
       --warmup_ticks_;
       if (last_ee_pose_ && last_ee_pose_->poses.size() >= 2) {
-        rby1_core_msgs::msg::LinkPoseCommand hold;
-        hold.link_names = {"ee_right", "ee_left"};
-        hold.poses.push_back(last_ee_pose_->poses[0]);
-        hold.poses.push_back(last_ee_pose_->poses[1]);
+        tf2_msgs::msg::TFMessage hold;
+        const rclcpp::Time stamp = now();
+        hold.transforms.reserve(2);
+        hold.transforms.push_back(makeTransformStamped(
+          "ee_right", poseToTransform(last_ee_pose_->poses[0]), stamp));
+        hold.transforms.push_back(makeTransformStamped(
+          "ee_left",  poseToTransform(last_ee_pose_->poses[1]), stamp));
         pub_pose_cmd_->publish(hold);
       }
       return;
@@ -957,10 +992,11 @@ class ViveRby1Node : public rclcpp::Node {
     sdk_prev_l_ = sdk_l;
     sdk_prev_r_ = sdk_r;
 
-    rby1_core_msgs::msg::LinkPoseCommand msg;
-    msg.link_names = {"ee_right", "ee_left"};
-    msg.poses.push_back(se3ToPose(*sdk_r));
-    msg.poses.push_back(se3ToPose(*sdk_l));
+    tf2_msgs::msg::TFMessage msg;
+    const rclcpp::Time stamp = now();
+    msg.transforms.reserve(3);
+    msg.transforms.push_back(se3ToTransformStamped("ee_right", *sdk_r, stamp));
+    msg.transforms.push_back(se3ToTransformStamped("ee_left",  *sdk_l, stamp));
     if (use_torso_ && ref_body_ && torso5_0_ && tracker_b_.smoothed) {
       Eigen::Vector3d delta_b = v2r_R_ * (tracker_b_.smoothed->translation() - ref_body_->translation());
       const Eigen::Matrix3d dR_b = tracker_b_.smoothed->rotation() * ref_body_->rotation().transpose();
@@ -972,8 +1008,7 @@ class ViveRby1Node : public rclcpp::Node {
       }
       const pinocchio::SE3 torso_target(dR_b_robot * torso5_0_->rotation(),
                                         torso5_0_->translation() + torso_pos_scale_ * delta_b);
-      msg.link_names.push_back("link_torso_5");
-      msg.poses.push_back(se3ToPose(torso_target));
+      msg.transforms.push_back(se3ToTransformStamped("link_torso_5", torso_target, stamp));
     }
     pub_pose_cmd_->publish(msg);
   }
@@ -995,7 +1030,7 @@ class ViveRby1Node : public rclcpp::Node {
   rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr srv_set_use_torso_;
   rclcpp::Subscription<geometry_msgs::msg::PoseArray>::SharedPtr sub_ee_pose_;
 
-  rclcpp::Publisher<rby1_core_msgs::msg::LinkPoseCommand>::SharedPtr pub_pose_cmd_;
+  rclcpp::Publisher<tf2_msgs::msg::TFMessage>::SharedPtr pub_pose_cmd_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_rec_state_;
   rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr pub_rec_episode_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_tracker_status_;

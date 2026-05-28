@@ -14,7 +14,10 @@ Subscriptions:
 
 Publications (to hw-core):
   /rby1/cmd/joint         sensor_msgs/JointState     (pink_position / pink_impedance)
-  /rby1/cmd/pose          rby1_core_msgs/LinkPoseCommand (sdk_position / sdk_impedance)
+  /rby1/cmd/pose          tf2_msgs/TFMessage         (sdk_position / sdk_impedance;
+                                                     used as data, NOT a TF broadcast.
+                                                     child_frame_id: ee_right / ee_left /
+                                                     link_torso_5)
   /teleop/rec_state       std_msgs/String            (IDLE / READY / RECORDING / PAUSED)
   /teleop/rec_episode     std_msgs/Int32             (current episode_id, -1 when IDLE)
 
@@ -59,13 +62,13 @@ from scipy.spatial.transform import Rotation as R, Slerp
 
 import rclpy
 from rclpy.node import Node
-from geometry_msgs.msg import PoseStamped, Pose
+from geometry_msgs.msg import PoseStamped, Pose, Transform, TransformStamped
 from sensor_msgs.msg import Joy, JointState
 from std_msgs.msg import Int32, String
 from std_srvs.srv import Trigger
+from tf2_msgs.msg import TFMessage
 
 from rby1_core_msgs.srv import SetControlMode, SetStream, MoveToJointPosition
-from rby1_core_msgs.msg import LinkPoseCommand
 from scm_recording_msgs.srv import StartRecording, EndRecording, TogglePause
 from rby1_ik.rby1_ik import Rby1Ik, get_rby1_body_joint_name_list
 
@@ -114,6 +117,28 @@ def se3_to_pose(se3: pin.SE3) -> Pose:
     pose.orientation.z = float(q[2])
     pose.orientation.w = float(q[3])
     return pose
+
+
+def se3_to_transform(se3: pin.SE3) -> Transform:
+    t = Transform()
+    t.translation.x = float(se3.translation[0])
+    t.translation.y = float(se3.translation[1])
+    t.translation.z = float(se3.translation[2])
+    q = R.from_matrix(se3.rotation).as_quat()
+    t.rotation.x = float(q[0])
+    t.rotation.y = float(q[1])
+    t.rotation.z = float(q[2])
+    t.rotation.w = float(q[3])
+    return t
+
+
+def make_transform_stamped(child_frame_id: str, se3: pin.SE3, stamp) -> TransformStamped:
+    ts = TransformStamped()
+    ts.header.stamp = stamp
+    ts.header.frame_id = 'base'
+    ts.child_frame_id = child_frame_id
+    ts.transform = se3_to_transform(se3)
+    return ts
 
 
 def se3_to_pose_stamped(se3: pin.SE3, frame_id='world') -> PoseStamped:
@@ -253,7 +278,10 @@ class ViveRby1Node(Node):
 
         # Publishers (to hw-core)
         self._pub_joint_cmd     = self.create_publisher(JointState,      '/rby1/cmd/joint', 10)  # pink_position/impedance
-        self._pub_pose_cmd      = self.create_publisher(LinkPoseCommand, '/rby1/cmd/pose',  10)  # sdk_position/impedance
+        # /rby1/cmd/pose carries tf2_msgs/TFMessage as plain data (NOT a TF broadcast).
+        # Each TransformStamped names a target link via child_frame_id:
+        # 'ee_right', 'ee_left', and optionally 'link_torso_5'.
+        self._pub_pose_cmd      = self.create_publisher(TFMessage,       '/rby1/cmd/pose',  10)  # sdk_position/impedance
         self._pub_rec_state     = self.create_publisher(String,            '/teleop/rec_state',                10)
         self._pub_rec_ep        = self.create_publisher(Int32,             '/teleop/rec_episode',              10)
         self._pub_tracker_status = self.create_publisher(String,           '/teleop/tracker_status',           10)
@@ -726,11 +754,12 @@ class ViveRby1Node(Node):
                 return
             self._sdk_prev_l = sdk_l
             self._sdk_prev_r = sdk_r
-            msg = LinkPoseCommand()
-            msg.header.frame_id = 'base'
-            msg.header.stamp = self.get_clock().now().to_msg()
-            msg.link_names = ['ee_right', 'ee_left']
-            msg.poses = [se3_to_pose(sdk_r), se3_to_pose(sdk_l)]
+            msg = TFMessage()
+            stamp = self.get_clock().now().to_msg()
+            msg.transforms = [
+                make_transform_stamped('ee_right', sdk_r, stamp),
+                make_transform_stamped('ee_left',  sdk_l, stamp),
+            ]
             # Torso target from body tracker (sdk_impedance only)
             if (self._ik_mode == 'sdk_impedance'
                     and self._ref_b is not None
@@ -747,8 +776,8 @@ class ViveRby1Node(Node):
                 sdk_torso = self._limit_sdk_target(self._sdk_prev_torso, torso_tgt, 'torso')
                 if sdk_torso is not None:
                     self._sdk_prev_torso = sdk_torso
-                    msg.link_names.append('link_torso_5')
-                    msg.poses.append(se3_to_pose(sdk_torso))
+                    msg.transforms.append(
+                        make_transform_stamped('link_torso_5', sdk_torso, stamp))
             elif self._ik_mode == 'sdk_impedance':
                 self.get_logger().info(
                     f'[torso] skip: ref_b={self._ref_b is not None} '
