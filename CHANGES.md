@@ -2,6 +2,13 @@
 
 ## 2026-05-30
 
+### scm_gui: 키보드 드라이빙 기본값 및 포커스 수정
+
+- Linear/Angular velocity 기본값 변경: 0.3 → 0.05 / 0.10.
+- 스핀박스 입력 후 Enter를 치거나 GUI 아무 곳이나 클릭하면 포커스 해제되어 즉시 키보드 조작 가능:
+  - 각 스핀박스에 `editingFinished → clearFocus()` 연결.
+  - `TeleopGuiWindow.mousePressEvent` 오버라이드 → `QApplication.focusWidget().clearFocus()`.
+
 ### scm_gui: q/e 방향 수정, VLA indicator 추가, 배터리 표시, depth 최소화
 
 - **q/e 회전 방향 수정 (`scm_gui_node.py`):**

@@ -1481,8 +1481,9 @@ class TeleopGuiWindow(QWidget):
         self._spn_lin = QDoubleSpinBox()
         self._spn_lin.setRange(0.01, 2.0)
         self._spn_lin.setSingleStep(0.05)
-        self._spn_lin.setValue(0.3)
+        self._spn_lin.setValue(0.05)
         self._spn_lin.setDecimals(2)
+        self._spn_lin.editingFinished.connect(self._spn_lin.clearFocus)
         form_lin.addWidget(self._spn_lin)
 
         form_ang = QHBoxLayout()
@@ -1491,8 +1492,9 @@ class TeleopGuiWindow(QWidget):
         self._spn_ang = QDoubleSpinBox()
         self._spn_ang.setRange(0.01, 3.14)
         self._spn_ang.setSingleStep(0.05)
-        self._spn_ang.setValue(0.3)
+        self._spn_ang.setValue(0.10)
         self._spn_ang.setDecimals(2)
+        self._spn_ang.editingFinished.connect(self._spn_ang.clearFocus)
         form_ang.addWidget(self._spn_ang)
 
         vel_vbox.addLayout(form_lin)
@@ -1536,6 +1538,12 @@ class TeleopGuiWindow(QWidget):
         return outer
 
     # ── Keyboard drive handlers ────────────────────────────────────────────
+
+    def mousePressEvent(self, event):
+        focused = QApplication.focusWidget()
+        if focused is not None:
+            focused.clearFocus()
+        super().mousePressEvent(event)
 
     def keyPressEvent(self, event):
         if not event.isAutoRepeat():
