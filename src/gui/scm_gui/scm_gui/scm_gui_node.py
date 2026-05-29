@@ -16,7 +16,7 @@ import time
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
-from sensor_msgs.msg import Joy, JointState
+from sensor_msgs.msg import BatteryState, Joy, JointState
 from std_msgs.msg import Int32, String
 from std_srvs.srv import SetBool, Trigger
 
@@ -81,7 +81,10 @@ TELEOP_NODES = [
 RECORDING_NODES = [
     ('scm_recording', 'recorder'),
 ]
-NODES_TO_WATCH = CORE_NODES + VISION_NODES + TELEOP_NODES + RECORDING_NODES
+VLA_NODES = [
+    ('rby1_vla_client', 'vla_ros2_bridge'),
+]
+NODES_TO_WATCH = CORE_NODES + VISION_NODES + TELEOP_NODES + RECORDING_NODES + VLA_NODES
 
 MODULE_ORDER = [
     ('Core',           CORE_NODES),
@@ -89,7 +92,7 @@ MODULE_ORDER = [
     ('StateMachine',   []),
     ('MotionPlanning', []),
     ('Driving',        []),
-    ('VLA',            []),
+    ('VLA',            VLA_NODES),
     ('Teleop',         TELEOP_NODES),
     ('Recording',      RECORDING_NODES),
 ]
@@ -199,14 +202,16 @@ class ScmGuiNode(Node):
         self._tracker_status_cbs  = []
         self._rby1_status_cbs     = []
         self._clutch_state_cbs    = []
+        self._battery_cbs         = []
 
         self.create_subscription(Joy,    '/teleop/pedal',          self._cb_pedal,          10)
         self.create_subscription(String, '/teleop/rec_state',      self._cb_rec_state,      10)
         self.create_subscription(Int32,  '/teleop/rec_episode',    self._cb_rec_episode,    10)
-        self.create_subscription(String, '/teleop/tracker_status', self._cb_tracker_status, 10)
-        self.create_subscription(String, '/rby1/state/status',     self._cb_rby1_status,    10)
+        self.create_subscription(String, '/teleop/tracker_status', self._cb_tracker_status,  1)
+        self.create_subscription(String, '/rby1/state/status',     self._cb_rby1_status,     1)
         self.create_subscription(String, '/teleop/clutch_state',   self._cb_clutch_state,   10)
-        self.create_subscription(JointState, '/rby1/state/joint', self._cb_joint_state, 10)
+        self.create_subscription(JointState, '/rby1/state/joint',  self._cb_joint_state,     1)
+        self.create_subscription(BatteryState, '/rby1/state/battery', self._cb_battery,      1)
         self._latest_joint_state = None
         self._next_joint_cb = None
         self.create_timer(1.0, self._poll_nodes)
@@ -275,6 +280,10 @@ class ScmGuiNode(Node):
     def _cb_clutch_state(self, msg):
         for cb in self._clutch_state_cbs:
             cb(msg.data)
+
+    def _cb_battery(self, msg: BatteryState):
+        for cb in self._battery_cbs:
+            cb(msg)
 
     def _cb_joint_state(self, msg):
         self._latest_joint_state = msg
@@ -533,6 +542,7 @@ class Signals(QObject):
     tracker_status_changed = Signal(str, str, str)   # sl, sr, sb(body)
     rby1_status_changed    = Signal(dict)
     clutch_state_changed   = Signal(str)
+    battery_changed        = Signal(object)
     service_result         = Signal(bool, str)
     connect_result         = Signal(bool, str)
     execute_done           = Signal(bool, str)
@@ -637,6 +647,7 @@ class TeleopGuiWindow(QWidget):
         signals.tracker_status_changed.connect(self._on_tracker_status)
         signals.rby1_status_changed.connect(self._on_rby1_status)
         signals.clutch_state_changed.connect(self._on_clutch_state)
+        signals.battery_changed.connect(self._on_battery)
         signals.service_result.connect(self._on_service_result)
         signals.connect_result.connect(self._on_connect_result)
         signals.joint_state_received.connect(self._on_joint_state_received)
@@ -735,9 +746,10 @@ class TeleopGuiWindow(QWidget):
         self._lbl_servo   = _make_status_label('Servo')
         self._lbl_control = _make_status_label('Ctrl')
         self._lbl_mobile  = _make_status_label('Mobile')
-        self._lbl_gripper = _make_status_label('Gripper')
+        self._lbl_gripper  = _make_status_label('Gripper')
+        self._lbl_battery  = _make_status_label('Battery')
         for lbl in (self._lbl_power, self._lbl_servo, self._lbl_mobile,
-                    self._lbl_control, self._lbl_gripper):
+                    self._lbl_control, self._lbl_gripper, self._lbl_battery):
             row.addWidget(lbl)
         return row
 
@@ -1551,8 +1563,8 @@ class TeleopGuiWindow(QWidget):
             - (lin if Qt.Key.Key_S in keys else 0.0)
         vy  = (lin if Qt.Key.Key_A in keys else 0.0) \
             - (lin if Qt.Key.Key_D in keys else 0.0)
-        yaw = (ang if Qt.Key.Key_E in keys else 0.0) \
-            - (ang if Qt.Key.Key_Q in keys else 0.0)
+        yaw = (ang if Qt.Key.Key_Q in keys else 0.0) \
+            - (ang if Qt.Key.Key_E in keys else 0.0)
         self._node.publish_base_vel(vx, vy, yaw)
 
     def _on_drive_enable_toggled(self, checked: bool):
@@ -1875,6 +1887,17 @@ class TeleopGuiWindow(QWidget):
         else:
             _set(self._lbl_control, 'Ctrl Idle', _C_OFF)
 
+    def _on_battery(self, msg: BatteryState):
+        pct = int(msg.percentage * 100) if msg.percentage >= 0 else None
+        volt = f'{msg.voltage:.1f}V' if msg.voltage > 0 else ''
+        text = (f'Bat {pct}% {volt}'.strip() if pct is not None else 'Bat —')
+        color = (_C_ON          if pct is not None and pct >= 50
+                 else '#F0C040' if pct is not None and pct >= 20
+                 else _C_OFF_RED)
+        self._lbl_battery.setText(f'  {text}  ')
+        self._lbl_battery.setStyleSheet(
+            f'background-color: {color}; border-radius: 4px;')
+
     def _on_pedal(self, state: list):
         for i, (btn, pressed) in enumerate(zip(self._btn_pedals, state)):
             color = '#A6D256' if pressed else '#ccc'
@@ -2035,6 +2058,7 @@ def main(args=None):
     ros_node._tracker_status_cbs.append( lambda l, r, b: signals.tracker_status_changed.emit(l, r, b))
     ros_node._rby1_status_cbs.append(    lambda d:    signals.rby1_status_changed.emit(d))
     ros_node._clutch_state_cbs.append(   lambda s:    signals.clutch_state_changed.emit(s))
+    ros_node._battery_cbs.append(        lambda m:    signals.battery_changed.emit(m))
 
     signals.dispatch.connect(lambda fn: fn())
 

@@ -1,5 +1,25 @@
 # CHANGES
 
+## 2026-05-30
+
+### scm_gui: q/e 방향 수정, VLA indicator 추가, 배터리 표시, depth 최소화
+
+- **q/e 회전 방향 수정 (`scm_gui_node.py`):**
+  - `_on_drive_tick()` yaw 공식에서 Q(+)/E(-) 부호가 반전되어 있던 것을 수정.
+  - 버튼 아이콘도 Q=↻, E=↺ 로 교체.
+
+- **VLA 노드 indicator 추가:**
+  - `VLA_NODES = [('rby1_vla_client', 'vla_ros2_bridge')]` 추가.
+  - `MODULE_ORDER` VLA 행에 연결, `NODES_TO_WATCH` 포함 → ROS2 Node Status 패널에 자동 표시.
+
+- **배터리 상태 표시:**
+  - `sensor_msgs/BatteryState` import 추가.
+  - `/rby1/state/battery` 구독 (depth=1), `_cb_battery` → `battery_changed` Signal → `_on_battery` 핸들러.
+  - 상태 표시줄 Gripper 옆에 `Battery` 라벨 추가 (50%↑ 초록 / 20%↑ 노랑 / 미만 빨강).
+
+- **비실시간 구독 depth 최소화 (10 → 1):**
+  - `/rby1/state/status`, `/rby1/state/joint`, `/teleop/tracker_status`, `/rby1/state/battery`.
+
 ## 2026-05-29
 
 ### scm_gui: Servo On/Off 분리 — body only / Mobile On/Off 버튼 추가
