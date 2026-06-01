@@ -1,5 +1,47 @@
 # CHANGES
 
+## 2026-06-02
+
+### vive_rby1: disengage 직후 EE 잔여 모션 제거 (cooldown hold)
+
+- **배경:** pedal A 해제(disengage) 시 `vive_rby1`는 `/rby1/cmd/pose` publish만 멈출 뿐, hw-core stream loop는 마지막 캐시 target(`T_r/T_l`)을 100Hz로 펌웨어에 계속 재전송한다. 빠른 트래커 모션 끝에서 손을 떼면 펌웨어 CartesianImpedance가 그 캐시 target까지 velocity-limited(`ee_lin_vel=0.4 m/s`)로 추종하며 ~1초간 팔이 미끄러지는 잔여 모션 발생. legacy/현재 공통 약점(전용 freeze 명령 부재, 펌웨어 hold-time에만 의존).
+- **변경 (단일 노드, `src/core/vive_rby1/src/vive_rby1_node.cpp`):** 기존 `warmup_ticks_` 패턴을 disengage 측에 대칭으로 추가.
+  - `disengage()`에서 `cooldown_ticks_ = round(cooldown_sec_ * publish_rate_)` 설정.
+  - `onTimer()` warmup 분기 직후에 cooldown 분기 추가 — 현재 FK pose(`last_ee_pose_` = `/rby1/state/ee_pose`)를 `ee_right`/`ee_left` hold로 publish해 hw-core 캐시 target을 실제 EE 위치로 snap(`has_new=true`) → 펌웨어 target≈actual → 모션 즉시 정지.
+  - `engage()`에서 `cooldown_ticks_=0`으로 진행 중 cooldown 즉시 취소(재engage 우선, 점프 없음).
+  - torso(`link_torso_5`)는 warmup과 동일하게 hold에서 제외(stream 시작 시 seed된 `T_torso`를 펌웨어 impedance가 유지).
+- **신규 파라미터:** `cooldown_sec` (기본 0.5, 0이면 비활성). `teleop.launch.py`의 vive_rby1_node 블록에 `'cooldown_sec': 0.5` 노출.
+- **hw-core 변경 없음.** ControlHoldTime은 stream 단절 시 grace timer로 별개 — 줄여도 본 잔여 모션은 해결되지 않고 일시적 지연에 대한 안정성만 악화되므로 건드리지 않음.
+- **호환성:** 신규 파라미터는 기본값 보존, 기존 동작에 영향 없음. disengage 구간(`!engaged_`)에만 작동하므로 master perceived delay 없음.
+- **검증:** Docker colcon `--packages-select vive_rby1` 빌드. 실로봇에서 빠른 트래커 모션 중 pedal A 해제 시 ≤cooldown_sec 내 정지 확인. hw-core stream 로그에 cooldown 기간 `has_new=1` 유입 확인.
+
+## 2026-06-01
+
+### 패키지별 한국어 개발자 가이드(`DEVELOPER.ko.md`) 신설 + README 이중언어화 + 핵심 파일 헤더 주석 추가
+
+- **배경:** teleop 워크스페이스에 13개 패키지가 있는데 패키지 내부 구조(파일 책임/함수 역할/파라미터·토픽·서비스 상세)를 코드 옆에서 바로 참고할 수 있는 문서가 부재. 외부/신규 개발자 진입장벽이 큼.
+- **신규 MD (13개):**
+  - `src/core/vive_rby1/DEVELOPER.ko.md` — C++ 프로덕션 + Python debug, 5-state 녹화 머신, body tracker → torso, 핵심 함수 매핑, 흔한 함정
+  - `src/core/manus_inspire/DEVELOPER.ko.md` — 4-phase 16s 캘리브 절차, ergonomic → Inspire 매핑, 캘리브 파일 구조
+  - `src/core/rby1_ik/DEVELOPER.ko.md` — legacy 위치 표기 (debug 노드 전용), `OneEuroFilterVec`/`Rby1IK` 요약
+  - `src/gui/scm_gui/DEVELOPER.ko.md` — PySide6 + 백그라운드 노드, Signal-Slot 패턴, 5개 노드 그룹 모니터링, Mobile Base Panel
+  - `src/input/pedal_ros2/DEVELOPER.ko.md` — evdev + grab() + KEY_MAP, input 그룹 권한
+  - `src/input/vive_ros2/DEVELOPER.ko.md` — OpenVR 폴링, OpenVR→ROS 좌표 변환, base station 정렬
+  - `src/input/manus_ros2/DEVELOPER.ko.md` — Manus SDK Integrated 모드, 5개 콜백, ManusSDK 바이너리 배치
+  - `src/launch/teleop_bringup/DEVELOPER.ko.md` — launch 인자/노드별 파라미터/기동 순서
+  - `src/msgs/rby1_core_msgs/DEVELOPER.ko.md` — hw-core 사본 동기화 절차 (간략 + 정본 link)
+  - `src/msgs/inspire_hand_msgs/DEVELOPER.ko.md` — 동일
+  - `src/msgs/manus_ros2_msgs/DEVELOPER.ko.md` — 3개 msg 필드, raw_node_count vs size() 함정
+  - `src/msgs/scm_recording_msgs/DEVELOPER.ko.md` — 외부 scm_recording core와의 srv 계약, 5개 srv 의미
+  - `src/msgs/interbotix_xs_msgs/DEVELOPER.ko.md` — COLCON_IGNORE 이유, system 설치 가정
+- **README.md 이중언어화:** 한국어 본문(상단) + 영어 번역(하단). 패키지별 가이드 cross-link, 페달 매핑/제어 모드/녹화 워크플로/Mobile Base Panel/keyboard driving 표 보강.
+- **코드 헤더 주석 추가 (CLAUDE.md "WHY 비자명한 곳에만" 정책 준수):**
+  - `src/core/vive_rby1/src/vive_rby1_node.cpp` 상단 + `engage()`/`onSetUseTorso`/doTeleopStart의 nullspace 재전송 직전 — 책임 요약, 캡처 시점 의미, body tracker on/off 의도
+  - `src/core/manus_inspire/manus_inspire/manus_inspire.py` 상단 — 캘리브 4-phase 의미 + 매핑 흐름
+  - `src/gui/scm_gui/scm_gui/scm_gui_node.py` 상단 — 레이아웃 + Signal-Slot 패턴 + depth=1 의도(2026-05-30)
+- **호환성:** 코드 변경은 주석뿐 — 빌드/런타임 영향 없음.
+- **검증:** colcon 빌드 무관. cross-link 경로 grep 확인.
+
 ## 2026-05-30
 
 ### scm_gui: 키보드 드라이빙 기본값 및 포커스 수정

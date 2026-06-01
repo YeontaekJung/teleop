@@ -1,146 +1,95 @@
 # teleop
 
-ROS2 Humble workspace for bimanual teleoperation using motion capture hardware.
-Currently supports RB-Y1 robot with Vive Trackers (arm control) and Manus gloves (hand control).
-Designed to be extensible — additional robot platforms and input devices can be added as new packages.
+> RB-Y1 양손 텔레오퍼레이션 ROS2 Humble 워크스페이스 — Vive Tracker(팔) + Manus Glove(손) + PCsensor Pedal(클러치/녹화) + PySide6 GUI.
+> ROS2 Humble workspace for bimanual teleoperation of RB-Y1 — Vive Trackers (arms), Manus gloves (hands), PCsensor pedals (clutch/recording), and a PySide6 GUI.
 
-## Architecture
+---
 
-```
-Input              Core                      Output
-──────────────────────────────────────────────────────────────────────
-manus_ros2      →  manus_inspire          →  /rt/inspire_hand/ctrl/{l,r}   (Inspire Hand driver)
-vive_ros2       →  vive_rby1_node (C++)   →  /rby1/cmd/pose  (sdk_impedance/position → rby1_core_node)
-                   vive_rby1_debug_node   →  /rby1/cmd/joint (pink_position/impedance, debug only)
-                   (Python, manual only)  →  /rby1/cmd/pose  (sdk modes)
-pedal_ros2      →  vive_rby1 state machine→  /scm_recording/{start,end,toggle_pause}
-GUI             →  scm_gui_node           →  /rby1/ctrl/mode, /rby1/stream, /rby1/set_nullspace_joint_ref, /rby1/set_cartesian_joint_limits, /rby1/set_nullspace_weight, /vive_rby1/set_use_torso services
-```
+## 한국어 (Korean)
 
-Source layout (since the 2026-05 reorg, packages are grouped by role under `src/`):
+### 개요
 
-```
-teleop/src/
-├── input/   {vive_ros2, manus_ros2, pedal_ros2}
-├── core/    {vive_rby1, manus_inspire, rby1_ik}
-├── gui/     scm_gui
-├── launch/  teleop_bringup
-└── msgs/    {rby1_core_msgs, scm_recording_msgs, manus_ros2_msgs, inspire_hand_msgs, interbotix_xs_msgs (COLCON_IGNORE)}
-```
+`teleop`는 RB-Y1 로봇의 양손 텔레오퍼레이션을 위한 ROS2 워크스페이스입니다. 입력 디바이스(트래커, 글로브, 페달)에서 들어온 모션 캡처 데이터를 SDK Cartesian Impedance 명령으로 변환해 `rby1_core_node`(hw-core)로 흘려보냅니다. PySide6 기반 GUI가 라이브 모니터링과 라이프사이클 제어 일체를 통합합니다.
 
-A GUI node (`scm_gui`, executable `scm_gui_node`) provides live system status (Core / Vision / Teleop / Recording node groups), teleop controls, tracker status, calibration, and runtime CartesianImpedance tuning (joint limits / nullspace weights / nullspace ref pose).
-
-## Published Topics
-
-### rby1_core_node (hw-core)
-
-| Topic | Type | Description |
-|-------|------|-------------|
-| `/rby1/state/status` | `std_msgs/String` | JSON system state — `control_state`(str) + `power_state`/`servo_state`/`stream_state`(bool) + `has_gripper`(bool) + `ctr_type`(str) |
-| `/rby1/state/joint` | `sensor_msgs/JointState` | Body joints only (20: torso+arms) — wheels and head excluded. Always 100 Hz. |
-| `/rby1/state/ee_pose` | `geometry_msgs/PoseArray` | SDK FK 기반 EE pose — poses[0]=ee_right, poses[1]=ee_left (base frame) |
-| `/rby1/state/odom` | `nav_msgs/Odometry` | Base odometry, always-on |
-| `/rby1/state/battery` | `sensor_msgs/BatteryState` | Battery state, always-on |
-| `/rby1/state/ft/{right,left}` | `geometry_msgs/WrenchStamped` | Per-arm tool-flange F/T, always-on |
-| `/rby1/diag/manipulability` | `std_msgs/Float64MultiArray` | `[right, left]` manipulability index |
-| `/rby1/cmd/joint_ik` | `sensor_msgs/JointState` | SDK IK reference (CartesianImpedance 스트림에서만 발행) |
-
-### vive_rby1_node
-
-| Topic | Type | Description |
-|-------|------|-------------|
-| `/rby1/cmd/pose` | `tf2_msgs/TFMessage` (데이터용; TF 브로드캐스트 아님) | sdk_position / sdk_impedance EE target (C++ 프로덕션 노드). `transforms[].child_frame_id`에 `ee_right` / `ee_left` (+ 옵션 `link_torso_5`) |
-| `/rby1/cmd/joint` | `sensor_msgs/JointState` | pink_position / pink_impedance joint 명령 (Python 디버그 노드만) |
-| `/teleop/rec_state` | `std_msgs/String` | 녹화 상태 (IDLE / ARMING / READY / RECORDING / PAUSED) |
-| `/teleop/rec_episode` | `std_msgs/Int32` | 현재 에피소드 번호 |
-| `/teleop/tracker_status` | `std_msgs/String` | 트래커 상태 — `L:OK/JITTER/LOST R:OK/JITTER/LOST` (+ `B:OK/JITTER/LOST` when a body tracker has been seen) |
-| `/teleop/clutch_state` | `std_msgs/String` | clutch engaged / disengaged |
-
-## Hardware Requirements (Current Setup)
-
-| Hardware | Role |
-|----------|------|
-| Rainbow Robotics RB-Y1 | Teleoperated robot |
-| HTC Vive Tracker 3.0 × 2 | Arm pose tracking |
-| HTC Vive Base Station × 2 | SteamVR tracking |
-| Manus Prime X Haptic gloves | Hand/finger tracking |
-| Inspire Hand × 2 | Robot hands |
-| PCsensor FootSwitch (3-pedal) | Clutch / mode control |
-
-## Prerequisites
-
-- Ubuntu 22.04
-- ROS2 Humble (`ros-humble-desktop`)
-- SteamVR running with Vive Trackers paired before launching
-- ManusSDK (see Installation step 2)
-- `rby1_core` package installed (provides `Rby1ControllerJointTeleop`, `Rby1ControllerJointImpedanceTeleop`, etc.)
-
-## Quick Start
-
-Start SteamVR and pair all Vive devices, then:
-
-```bash
-source install/setup.bash
-ros2 launch teleop_bringup teleop.launch.py
-```
-
-This launches all nodes: pedal driver, Vive tracker, Manus publisher, arm IK bridge, hand mapper, and GUI.
-
-The GUI shows live node status, pedal state, tracker status (OK / JITTER / LOST), recording state, control mode selector, teleop buttons, and the calibration panel.
-
-## Installation
-
-### 1. Clone the repository
-
-```bash
-git clone <repo-url> teleop
-cd teleop
-```
-
-### 2. ManusSDK (manual copy required — binary too large for git)
-
-Copy the ManusSDK folder to the repo root:
+### 패키지 구조
 
 ```
 teleop/
+├── README.md                                    ← 이 문서
+├── CHANGES.md                                   변경 이력
+└── src/
+    ├── input/                                     입력 디바이스 드라이버
+    │   ├── pedal_ros2/                            PCsensor 3-pedal → /teleop/pedal (Joy)
+    │   ├── vive_ros2/                             OpenVR → /teleop/tracker/{left,right,body}
+    │   └── manus_ros2/                            Manus SDK → /manus_glove_*
+    ├── core/                                      변환·매핑 노드
+    │   ├── vive_rby1/                             트래커 → SDK Cartesian 명령 + 녹화 상태머신 (C++ 프로덕션 + Python 디버그)
+    │   ├── manus_inspire/                         Manus glove → Inspire Hand 명령 + 4-phase 캘리브
+    │   └── rby1_ik/                               (Legacy) pink IK 헬퍼 — debug 노드 전용
+    ├── gui/scm_gui/                               PySide6 GUI (스코프: 모든 라이프사이클 + 모니터링)
+    ├── launch/teleop_bringup/                     전체 시스템 launch
+    └── msgs/                                      메시지 패키지 5개
+        ├── rby1_core_msgs/                        ← hw-core 사본과 동기화 필수
+        ├── inspire_hand_msgs/                     ← hw-core 사본과 동기화 필수
+        ├── manus_ros2_msgs/                       Manus glove 메시지
+        ├── scm_recording_msgs/                    외부 녹화 core와의 srv 계약
+        └── interbotix_xs_msgs/                    참고용(COLCON_IGNORE)
+```
+
+각 패키지의 상세 개발자 가이드: 패키지 디렉토리 내부의 `DEVELOPER.ko.md` 참조.
+
+### 시스템 아키텍처 (데이터 흐름)
+
+```
+Vive Tracker × 2~3 ──vive_ros2──► vive_rby1 ──► /rby1/cmd/pose       ──► rby1_core_node ──► RB-Y1
+                                  (body tracker → torso in sdk_impedance)
+Manus Glove × 2    ──manus_ros2──► manus_inspire ──► /rt/inspire_hand/ctrl/{l,r} ──► inspire_hand_driver ──► Inspire Hand
+PCsensor Pedal     ──pedal_ros2──► vive_rby1 (recording state machine) ──► /scm_recording/*
+PySide6 GUI        ──scm_gui──► /rby1/{ctrl/mode,stream,…} services + /vive_rby1/* services
+```
+
+### 하드웨어 요구사항
+
+| 장비 | 역할 |
+|---|---|
+| Rainbow Robotics RB-Y1 | 텔레오퍼레이션 대상 로봇 |
+| HTC Vive Tracker 3.0 × 2 (~3) | 팔 trajectory (옵션 body tracker) |
+| HTC Vive Base Station × 2 | SteamVR 트래킹 |
+| Manus Prime X Haptic glove | 손가락 트래킹 |
+| Inspire Hand × 2 | 로봇 손 |
+| PCsensor FootSwitch (3-pedal) | 클러치 / 녹화 페달 |
+
+### 시스템 의존성
+
+- Ubuntu 22.04
+- ROS2 Humble (`ros-humble-desktop`)
+- SteamVR (Vive paired 상태)
+- ManusSDK 바이너리 (수동 복사 — `teleop/ManusSDK/{include,lib}/`)
+- hw-core 패키지 (`rby1_core`, `inspire_hand_driver` 등) — 별개 워크스페이스에 설치
+
+### 빌드 전 준비
+
+```bash
+sudo apt install ros-humble-desktop python3-pip libncurses-dev
+pip3 install pin pink scipy openvr evdev PySide6 pyyaml
+pip3 install empy==3.3.4    # ⚠ empy 4.x는 colcon 빌드 깨뜨림
+
+# pedal 권한 (1회, 재로그인 필수)
+sudo usermod -aG input $USER
+
+# conda 사용자: 비활성화 권장 (ROS2와 Python 충돌)
+conda deactivate
+```
+
+ManusSDK 배치:
+```
+teleop/
 └── ManusSDK/
-    ├── include/
-    │   ├── ManusSDK.h
-    │   ├── ManusSDKTypeInitializers.h
-    │   └── ManusSDKTypes.h
-    └── lib/
-        ├── libManusSDK.so
-        └── libManusSDK_Integrated.so
+    ├── include/{ManusSDK.h, ManusSDKTypeInitializers.h, ManusSDKTypes.h}
+    └── lib/{libManusSDK_Integrated.so, libManusSDK.so}
 ```
 
-Obtain from the Manus developer portal, or copy from a machine that already has it.
-
-### 3. System dependencies
-
-```bash
-sudo apt install ros-humble-desktop python3-pip
-```
-
-```bash
-pip3 install pin pink scipy openvr evdev PySide6
-pip3 install empy==3.3.4   # required for colcon build — do NOT use empy 4.x
-```
-
-> **Pedal (evdev) — one-time setup:**
-> The pedal driver requires read access to `/dev/input`. Add your user to the `input` group:
-> ```bash
-> sudo usermod -aG input $USER
-> ```
-> Then **fully log out and log back in** (closing the terminal is not enough).
-> Verify with: `groups` — `input` should appear in the list.
-
-> **Conda users:** Deactivate conda before building — its Python conflicts with ROS2.
-> ```bash
-> conda deactivate
-> which python3  # should be /usr/bin/python3
-> ```
-
-### 4. Build
+### 빌드
 
 ```bash
 cd teleop
@@ -149,215 +98,376 @@ colcon build
 source install/setup.bash
 ```
 
-> **Note:** `interbotix_xs_msgs` is included in the repo for reference but excluded from build
-> (`COLCON_IGNORE` present) — it is assumed to be installed system-wide.
+> `interbotix_xs_msgs`는 `COLCON_IGNORE`로 빌드 제외 — 시스템 설치 가정.
 
-## Configuration
-
-### Vive Tracker serial numbers
-
-Serials are loaded from `src/input/vive_ros2/config/trackers.yaml` (installed to the `vive_ros2` share dir and passed by the default launch). Edit that file, or pass as ROS parameters:
-
-```yaml
-vive_tracker_node:
-  ros__parameters:
-    serial_station_left:  LHB-XXXXXXXX
-    serial_station_right: LHB-XXXXXXXX
-    serial_tracker_left:  LHR-XXXXXXXX
-    serial_tracker_right: LHR-XXXXXXXX
-    serial_tracker_body:  LHR-XXXXXXXX   # optional body tracker for torso teleop
-```
-
-Find serials via SteamVR → Devices menu, or:
-```bash
-ros2 run vive_ros2 vive_tracker_node  # serials printed on connect
-```
-
-### URDF / SRDF paths
-
-Edit the default paths in `src/core/vive_rby1/config/vive_rby1.yaml`, or pass at runtime:
+### 실행
 
 ```bash
-ros2 run vive_rby1 vive_rby1_node --ros-args \
-  -p urdf_path:=/path/to/rby1.urdf \
-  -p srdf_path:=/path/to/rby1.srdf
+# 모든 노드 + GUI 한 번에
+ros2 launch teleop_bringup teleop.launch.py
+
+# 시뮬레이터 모드 (입력 노드 비활성, core + GUI만)
+ros2 launch teleop_bringup teleop.launch.py sim:=true
+
+# 일부 입력만 비활성
+ros2 launch teleop_bringup teleop.launch.py use_vive:=false
 ```
 
-### IK / Teleop tuning parameters
+GUI가 뜨면:
+1. **Connect** 버튼 (hw-core `rby1_core_node` 연결)
+2. **Power On** → **Servo On** → **Ctrl Enable**
+3. 그리퍼 사용 시 **Gripper Init**
+4. (선택) **Move To Pose** — preset 자세로 이동
+5. **▶ Teleop Start** 또는 Recording 패널의 **▶ Start Episode**
 
-Adjustable in `src/launch/teleop_bringup/launch/teleop.launch.py`:
+### 페달 매핑
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `publish_rate` | 100.0 Hz | IK command publish rate (matches hw-core 100 Hz RT loop) |
-| `ik_dt` | 0.05 s | Differential IK time step (larger = faster tracking, more overshoot) |
-| `pos_scale` | 0.5 | Tracker-to-robot position scale (hand trackers) |
-| `torso_pos_scale` | 1.0 | Body tracker position scale (torso) |
-| `use_torso` | `False` | Enable body-tracker → `link_torso_5` streaming. Toggle at runtime via the GUI **Use Torso** checkbox (`/vive_rby1/set_use_torso`) or `/teleop/use_torso` topic. |
-| `sdk_max_delta_pos` | 0.03 m | Per-frame Cartesian step clamp (mirrors hw-core `cmd_pose.max_delta_pos`). |
+| 페달 | 함수 |
+|---|---|
+| A (왼쪽) | 클러치 engage/disengage (REC↔PAUSED) |
+| B (가운데) | 에피소드 폐기 (`EndRecording(discard=true)`) |
+| C (오른쪽) | 에피소드 시작/종료 (IDLE↔ARMING, PAUSED→IDLE) |
 
-`max_teleop_dq` (joint velocity clamp, 1.5 rad/s) is hardcoded in `src/core/vive_rby1/src/vive_rby1_node.cpp`.
+### 제어 모드 (Mode dropdown)
 
-## Usage
+| 모드 | 토픽 | 설명 |
+|---|---|---|
+| SDK Impedance | `/rby1/cmd/pose` | Cartesian impedance (C++ 프로덕션 노드, default) |
+| SDK Position | `/rby1/cmd/pose` | Cartesian position (C++ 노드) |
+| Pink Position | `/rby1/cmd/joint` | Joint position via pink IK (**debug 노드 전용**, 수동 실행) |
+| Pink Impedance | `/rby1/cmd/joint` | Joint impedance via pink IK (debug 노드 전용) |
 
-### Pedal Mapping
+### 녹화 워크플로
 
-| Pedal | Function |
-|-------|----------|
-| A (left) | Toggle arm engage / disengage |
-| B (center) | Discard episode — calls `/scm_recording/end` with `discard=true` to abort the active episode |
-| C (right) | Toggle Start / End recording episode |
+전제: `scm_recording` core (별도 패키지, `/scm_recording/*` 서비스 서버) + `rby1_core_node` 실행 중.
 
-### Control Modes
+1. Task ID 선택 (Recording 패널)
+2. Mode 선택 (`SDK Impedance` 권장)
+3. **▶ Start Episode** (또는 페달 C) → ARMING (mode 설정 → ready pose 이동 → stream 시작) → READY
+4. **페달 A** 눌러 클러치 engage → RECORDING
+5. **페달 A** 눌러 disengage → PAUSED (에피소드 유지)
+6. 4~5 반복 (여러 engage cycle)
+7. **■ End Episode** (또는 PAUSED 시 페달 C) → 에피소드 저장 → IDLE
 
-Select in the GUI before starting a session (locked during active recording):
+### 트래커 상태
 
-| Mode | Topic | Description |
-|------|-------|-------------|
-| SDK Impedance | `/rby1/cmd/pose` | Cartesian impedance targets (C++ node, default launch) |
-| SDK Position | `/rby1/cmd/pose` | Cartesian position targets (C++ node) |
-| Pink Position | `/rby1/cmd/joint` | Joint position tracking via differential IK (Python debug node only) |
-| Pink Impedance | `/rby1/cmd/joint` | Joint impedance tracking via local IK (Python debug node only) |
+GUI Node Status 패널 또는 `/teleop/tracker_status`:
 
-### Teleoperation (without recording)
+| 상태 | 색상 | 의미 |
+|---|---|---|
+| OK | 초록 | 데이터 정상 |
+| JITTER | 노랑 | 위치 분산 > 3mm σ (10+ 샘플, 20-deep buffer) |
+| LOST | 빨강 | 0.5s 이상 stamp 갭 |
 
-Use the GUI **Teleop** panel buttons directly:
+### Manus 캘리브레이션
 
-| Button | Action |
-|--------|--------|
-| ▶ Teleop Start | Set control mode → start stream (`/rby1/ctrl/mode` + `/rby1/stream` services) |
-| Move To Pose | Move robot to a named joint preset from `config/named_poses.yaml` (`/rby1/move_to_joint_position`) |
-| Use Torso (checkbox) | Toggle body-tracker → torso CartesianImpedance streaming (`/vive_rby1/set_use_torso`). Default off. |
-| ■ Teleop Stop | Stop stream |
+- **첫 실행**: 파일 없으면 자동 시작
+- **재캘리브레이션**: GUI **Recalibrate** 버튼 또는 `ros2 service call /manus_inspire/calibrate std_srvs/srv/Trigger`
+- 4 phase × 4초 = 총 16초
+- 캘리브 파일: `~/.ros/manus_inspire_calib.yaml`
 
-The GUI also exposes a **Cartesian Impedance Params** section that live-updates hw-core via the three runtime services:
+| Phase | 자세 | 측정 |
+|---|---|---|
+| 1 | Open hands fully | 손가락 min + 엄지 spread min |
+| 2 | Thumbs up (주먹 + 엄지) | 손가락 max + 엄지 MCPStretch max |
+| 3 | Press thumb to side of index | 엄지 spread max |
+| 4 | Open fingers, bend thumb only | 엄지 MCPStretch min |
 
-| Control | Service |
-|---------|---------|
-| Joint limits table → `[Apply Joint Limits]` | `/rby1/set_cartesian_joint_limits` |
-| Nullspace weights table → `[Apply Weights]` | `/rby1/set_nullspace_weight` |
-| Nullspace ref pose dropdown → `[Apply Nullspace Ref]` | `/vive_rby1/set_teleop_pose` + `/rby1/set_nullspace_joint_ref` (both fire together) |
+### 키보드 드라이빙 (Mobile Base Panel, 2026-05-28 추가)
 
-Presets are saved to `config/impedance_presets.yaml`.
+GUI의 Mobile Base Panel에서 **Enable** 체크 후 키보드로 베이스 주행:
 
-### Recording Workflow
+| 키 | 동작 |
+|---|---|
+| W | 전진 (linear.x = +linear) |
+| S | 후진 (linear.x = -linear) |
+| A | 좌 strafe (linear.y = +linear) — Model M만 |
+| D | 우 strafe (linear.y = -linear) — Model M만 |
+| Q | 좌회전 (angular.z = +angular) |
+| E | 우회전 (angular.z = -angular) |
 
-Requires `scm_recording` core (`/scm_recording/*` services) and `rby1_core_node` to be running.
+기본값: linear = 0.05 m/s, angular = 0.10 rad/s (2026-05-30 변경).
 
-1. Select `task_id` in the GUI Recording panel.
-2. Select control mode: **SDK Impedance** (default) or **SDK Position**.
-3. Click **▶ Start Episode** (or press pedal C) — system enters **ARMING** (sets control mode → moves to ready pose → starts stream), then **READY**.
-4. **Press pedal A** to engage arm → recording starts (RECORDING).
-5. **Press pedal A** to disengage → recording pauses (PAUSED).
-6. Repeat steps 4–5 to collect data across multiple engage cycles.
-7. Click **■ End Episode** (or press pedal C) when PAUSED — episode saved, robot returns to IDLE.
+가속 한계는 `Driving Parameter Manager`에서 런타임 변경 가능 (`/rby1_core_node/set_parameters`, 2026-05-28 (7)).
 
-Recording states:
+### vive_rby1_node 핵심 파라미터 (launch dict)
 
-| State | Color | Meaning |
-|-------|-------|---------|
-| IDLE | grey | No active session |
-| ARMING | blue | Transient: setting mode + moving to ready pose + starting stream |
-| READY | yellow | Session started, waiting for arm engage |
-| RECORDING | red | Arm engaged, data being recorded |
-| PAUSED | orange | Arm disengaged, session still active |
+| 파라미터 | 기본 | 의미 |
+|---|---|---|
+| `publish_rate` | 100.0 Hz | timer 주기 (hw-core RT 100Hz와 매치) |
+| `ik_dt` | 0.05 s | Differential IK 시간 단계 |
+| `pos_scale` | 0.5 | hand tracker 위치 스케일 |
+| `torso_pos_scale` | 1.0 | body tracker 위치 스케일 |
+| `use_torso` | False | body tracker 비활성 (런타임 `/vive_rby1/set_use_torso`로 토글) |
+| `sdk_max_delta_pos` | 0.03 m | per-frame Cartesian step clamp |
 
-### Tracker Status
+`max_teleop_dq` (1.5 rad/s)는 `vive_rby1_node.cpp`에 하드코딩.
 
-The GUI Node Status panel shows live tracker health. The `/teleop/tracker_status` string lists left/right hand trackers (`L:` / `R:`) and, when a body tracker has been seen, body (`B:`):
+### 흔한 함정 / 트러블슈팅
 
-| Status | Color | Meaning |
-|--------|-------|---------|
-| OK | green | Tracker data arriving normally |
-| JITTER | yellow | High position variance detected (> 3 mm σ across a sliding window — gated by ≥10 samples in a 20-deep buffer) |
-| LOST | red | No data received for > 0.5s |
+**페달 미감지**
+- `groups | grep input` 확인 → 없으면 `sudo usermod -aG input $USER` 후 **완전 재로그인**
+- `evdev` 디바이스 이름 확인: `python3 -c "import evdev; [print(d.name) for d in [evdev.InputDevice(p) for p in evdev.list_devices()]]"`
 
-### Manus Hand Calibration
+**Vive trackers publish 안 됨**
+- SteamVR 실행 + 모든 디바이스 녹색 확인
+- `trackers.yaml`의 시리얼 번호가 실제 디바이스와 일치하는지 확인
 
-Finger sensor ranges are calibrated per session and saved to `~/.ros/manus_inspire_calib.yaml`.
+**GUI에 LOST 표시**
+- SteamVR — 트래커 시야 차폐? 0.5s 타임아웃.
 
-- **First launch:** calibration starts automatically if no saved file is found.
-- **Recalibrate:** click **Recalibrate** in the GUI, or call the service:
-  ```bash
-  ros2 service call /manus_inspire/calibrate std_srvs/srv/Trigger
-  ```
+**빌드 실패 (empy 에러)**
+- `pip3 install empy==3.3.4` — colcon은 3.x 필요, 4.x 거부
 
-Calibration procedure (16 seconds total, 4 seconds per phase):
-
-| Phase | Pose | Calibrates |
-|-------|------|-----------|
-| 1 | Open hands fully | Finger min + thumb spread min |
-| 2 | Thumbs up (fist, thumb pointing up) | Finger max + thumb MCPStretch max |
-| 3 | Press thumb to side of index finger | Thumb spread max |
-| 4 | Open fingers, bend thumb only | Thumb MCPStretch min |
-
-> Delete `~/.ros/manus_inspire_calib.yaml` to force recalibration on next launch.
-
-## Individual Nodes (Advanced)
-
-Run components separately for development or partial setups:
-
-```bash
-# Input
-ros2 run pedal_ros2 pedal_node
-ros2 run vive_ros2 vive_tracker_node
-ros2 run manus_ros2 manus_data_publisher
-
-# Core
-ros2 run vive_rby1 vive_rby1_node
-ros2 run vive_rby1 vive_rby1_debug_node   # optional legacy Python debug node
-ros2 run manus_inspire manus_inspire_node
-
-# GUI
-ros2 run scm_gui scm_gui_node
-```
-
-## Packages
-
-| Package | Layer | Description |
-|---------|-------|-------------|
-| `pedal_ros2` | input | PCsensor FootSwitch → `sensor_msgs/Joy` on `/teleop/pedal` |
-| `manus_ros2` | input | Manus glove SDK → ROS2 (C++) |
-| `vive_ros2` | input | Vive Tracker 3.0 → `/teleop/tracker/{left,right,body}` (config in `trackers.yaml`) |
-| `manus_ros2_msgs` | msgs | Manus glove message types |
-| `inspire_hand_msgs` | msgs | Inspire hand message types |
-| `scm_recording_msgs` | msgs | Recording core service definitions |
-| `rby1_core_msgs` | msgs | RB-Y1 core srv 정의 (10 lifecycle services + 3 runtime tuning services). 포즈 명령은 `tf2_msgs/TFMessage`로 일원화. |
-| `manus_inspire` | core | Manus glove data → Inspire hand commands + 4-phase calibration |
-| `rby1_ik` | core | Legacy Python IK helper kept for debug/experiments (consumed only by `vive_rby1_debug_node`) |
-| `vive_rby1` | core | Tracker delta → RB-Y1 joint/pose commands, recording state machine, body-tracker → torso |
-| `scm_gui` | gui | PySide6 GUI — node status (Core / Vision / Teleop / Recording groups), tracker status, teleop panel, recording panel, Manus calibration, runtime CartesianImpedance tuning |
-| `teleop_bringup` | launch | Launch file for full system |
-
-## Troubleshooting
-
-**Pedal not detected**
-- Check `input` group membership: `groups | grep input`
-- If missing: `sudo usermod -aG input $USER` then fully log out and back in.
-- Note: re-login (e.g. after adding `realtime` group) resets the active session — re-check `groups` after every re-login and re-add if needed. `usermod` itself is permanent; only the active session needs refreshing.
-
-**Vive trackers not publishing**
-- Ensure SteamVR is running and trackers show green before launching.
-- Check serial numbers match the parameters in `vive_tracker_node.py`.
-
-**Tracker shows LOST in GUI**
-- Check SteamVR — tracker may have lost line-of-sight to base station.
-- Tracker stamp timeout is 0.5s.
-
-**Build fails with empy error**
-- `pip3 install empy==3.3.4` — colcon requires 3.x, not 4.x.
-
-**Build fails with conda Python**
-- `conda deactivate` before sourcing ROS or running colcon.
+**빌드 실패 (conda Python)**
+- `conda deactivate` 후 `which python3` 가 `/usr/bin/python3`인지 확인
 
 **ManusSDK not found**
-- Confirm `ManusSDK/include/ManusSDK.h` and `ManusSDK/lib/libManusSDK.so` exist at the repo root and are non-zero size.
+- `ManusSDK/include/ManusSDK.h`와 `ManusSDK/lib/libManusSDK_Integrated.so` 존재 + 크기 0 아닌지 확인
 
-**`rby1_core_node` services not available**
-- `rby1_core_node` must be running separately (not part of this repo).
-- Without it, mode switching and ready pose moves will fail, but the GUI still launches.
+**`rby1_core_node` 서비스 미가용**
+- hw-core 워크스페이스에서 별도로 실행 필요. 없으면 mode/move 실패하지만 GUI 자체는 뜸.
 
-**Robot joint trembling**
-- Reduce `max_teleop_dq` in `rby1_ik.py` (currently 1.5 rad/s).
-- Reduce `ik_dt` in launch file (currently 0.05s).
-- Both together determine max joint velocity: `max_teleop_dq × ik_dt = max Δq per step`.
+**로봇 떨림**
+- `vive_rby1_node.cpp`의 `max_teleop_dq` 낮춤
+- launch의 `ik_dt` 낮춤 (현재 0.05s)
+- 둘의 곱이 per-step Δq 한계
+
+### 변경 이력 / 메모
+
+- 2026-05-30: keyboard driving 기본값 0.05/0.10 변경, q/e 방향 정정, VLA indicator, 배터리 표시
+- 2026-05-29: `Mobile On/Off` 버튼 — Servo와 wheel servo 분리 (hw-core `SetServo.wheel_only` 신규)
+- 2026-05-28: Mobile Base Panel 추가, 키보드 드라이빙, accel_limit 런타임 변경
+- 2026-05-27: `/rby1/cmd/pose` 타입을 `tf2_msgs/TFMessage`로 마이그레이션
+- 2026-05-22: torso teleop (body tracker → link_torso_5) on/off 토글, Cartesian Impedance Params 패널, nullspace ref pose 통합
+- 2026-05-21: publish_rate 100Hz 복원, tracker smoothing alpha 0.9
+
+전체 항목은 [`CHANGES.md`](CHANGES.md) 참조.
+
+---
+
+## English
+
+### Overview
+
+`teleop` is a ROS2 Humble workspace for bimanual teleoperation of the RB-Y1 robot. It translates motion capture data from input devices (trackers, gloves, pedals) into SDK Cartesian Impedance commands consumed by `rby1_core_node` (in the hw-core workspace). A PySide6 GUI integrates live monitoring and lifecycle control.
+
+### Package layout
+
+```
+teleop/
+├── README.md                                   ← this file
+├── CHANGES.md                                  changelog
+└── src/
+    ├── input/{pedal_ros2, vive_ros2, manus_ros2}                input device drivers
+    ├── core/{vive_rby1, manus_inspire, rby1_ik}                 mapping/conversion nodes
+    ├── gui/scm_gui                                                PySide6 GUI
+    ├── launch/teleop_bringup                                      full-system launch
+    └── msgs/                                                      5 message packages
+        ├── rby1_core_msgs                                         ← keep in sync with hw-core copy
+        ├── inspire_hand_msgs                                      ← keep in sync with hw-core copy
+        ├── manus_ros2_msgs
+        ├── scm_recording_msgs                                     contract with external recording core
+        └── interbotix_xs_msgs                                     reference (COLCON_IGNORE)
+```
+
+Per-package developer guides are in each package's `DEVELOPER.ko.md` (Korean).
+
+### Architecture (data flow)
+
+```
+Vive Tracker × 2~3 ──vive_ros2──► vive_rby1 ──► /rby1/cmd/pose       ──► rby1_core_node ──► RB-Y1
+                                  (body tracker → torso in sdk_impedance)
+Manus Glove × 2    ──manus_ros2──► manus_inspire ──► /rt/inspire_hand/ctrl/{l,r} ──► inspire_hand_driver ──► Inspire Hand
+PCsensor Pedal     ──pedal_ros2──► vive_rby1 (recording state machine) ──► /scm_recording/*
+PySide6 GUI        ──scm_gui──► /rby1/{ctrl/mode,stream,…} services + /vive_rby1/* services
+```
+
+### Hardware requirements
+
+| Item | Role |
+|---|---|
+| Rainbow Robotics RB-Y1 | Teleoperated robot |
+| HTC Vive Tracker 3.0 × 2 (~3) | Arm trajectories (optional body tracker) |
+| HTC Vive Base Station × 2 | SteamVR tracking |
+| Manus Prime X Haptic gloves | Finger tracking |
+| Inspire Hand × 2 | Robot hands |
+| PCsensor FootSwitch (3-pedal) | Clutch / recording pedals |
+
+### System prerequisites
+
+- Ubuntu 22.04
+- ROS2 Humble (`ros-humble-desktop`)
+- SteamVR running with Vive devices paired
+- ManusSDK binary (manual copy — `teleop/ManusSDK/{include,lib}/`)
+- hw-core packages installed in a separate workspace
+
+### Pre-build setup
+
+```bash
+sudo apt install ros-humble-desktop python3-pip libncurses-dev
+pip3 install pin pink scipy openvr evdev PySide6 pyyaml
+pip3 install empy==3.3.4    # ⚠ empy 4.x breaks colcon
+
+# Pedal permissions (one-time, full re-login required)
+sudo usermod -aG input $USER
+
+# Conda users: deactivate (Python conflicts with ROS2)
+conda deactivate
+```
+
+ManusSDK layout:
+```
+teleop/
+└── ManusSDK/
+    ├── include/{ManusSDK.h, ManusSDKTypeInitializers.h, ManusSDKTypes.h}
+    └── lib/{libManusSDK_Integrated.so, libManusSDK.so}
+```
+
+### Build
+
+```bash
+cd teleop
+source /opt/ros/humble/setup.bash
+colcon build
+source install/setup.bash
+```
+
+> `interbotix_xs_msgs` is excluded from build (`COLCON_IGNORE`) — assumed installed system-wide.
+
+### Run
+
+```bash
+# All nodes + GUI
+ros2 launch teleop_bringup teleop.launch.py
+
+# Sim mode (no hardware input nodes, just core + GUI)
+ros2 launch teleop_bringup teleop.launch.py sim:=true
+
+# Disable a specific input
+ros2 launch teleop_bringup teleop.launch.py use_vive:=false
+```
+
+When the GUI is up:
+1. Press **Connect** (links to `rby1_core_node`)
+2. **Power On** → **Servo On** → **Ctrl Enable**
+3. **Gripper Init** if using RB Gripper
+4. (optional) **Move To Pose** — go to a preset
+5. **▶ Teleop Start** or **▶ Start Episode** (Recording panel)
+
+### Pedal mapping
+
+| Pedal | Function |
+|---|---|
+| A (left) | Toggle clutch engage/disengage (RECORDING↔PAUSED) |
+| B (center) | Discard episode (`EndRecording(discard=true)`) |
+| C (right) | Start / end episode (IDLE↔ARMING, PAUSED→IDLE) |
+
+### Control modes
+
+| Mode | Topic | Notes |
+|---|---|---|
+| SDK Impedance | `/rby1/cmd/pose` | Cartesian impedance (C++ production, default) |
+| SDK Position | `/rby1/cmd/pose` | Cartesian position |
+| Pink Position | `/rby1/cmd/joint` | Joint position via pink IK (**debug node only**, manual launch) |
+| Pink Impedance | `/rby1/cmd/joint` | Joint impedance via pink IK (debug node only) |
+
+### Recording workflow
+
+Requires `scm_recording` core (separate package, hosts `/scm_recording/*` services) + `rby1_core_node` running.
+
+1. Select Task ID in Recording panel
+2. Select mode (`SDK Impedance` recommended)
+3. **▶ Start Episode** (or pedal C) → ARMING (set mode → move to ready pose → start stream) → READY
+4. **Pedal A** — engage clutch → RECORDING
+5. **Pedal A** — disengage → PAUSED (episode still active)
+6. Repeat 4–5 for multiple engage cycles
+7. **■ End Episode** (or pedal C from PAUSED) → save episode → IDLE
+
+### Tracker status
+
+GUI Node Status panel or `/teleop/tracker_status`:
+
+| Status | Color | Meaning |
+|---|---|---|
+| OK | green | Data arriving normally |
+| JITTER | yellow | Position variance > 3 mm σ (10+ samples, 20-deep buffer) |
+| LOST | red | > 0.5 s stamp gap |
+
+### Manus calibration
+
+- **First launch**: auto-starts if no file found
+- **Recalibrate**: GUI **Recalibrate** button or `ros2 service call /manus_inspire/calibrate std_srvs/srv/Trigger`
+- 4 phases × 4 s = 16 s total
+- Calibration file: `~/.ros/manus_inspire_calib.yaml`
+
+### Keyboard driving (Mobile Base Panel, added 2026-05-28)
+
+In the GUI's Mobile Base Panel, check **Enable** and use keyboard:
+
+| Key | Action |
+|---|---|
+| W | Forward |
+| S | Backward |
+| A | Strafe left (Model M only) |
+| D | Strafe right (Model M only) |
+| Q | Yaw left |
+| E | Yaw right |
+
+Defaults: linear = 0.05 m/s, angular = 0.10 rad/s (changed 2026-05-30).
+
+Acceleration limits are runtime-mutable via the `Driving Parameter Manager` (uses `/rby1_core_node/set_parameters`, added 2026-05-28 (7)).
+
+### Key vive_rby1_node parameters (launch dict)
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `publish_rate` | 100.0 Hz | Timer period (matches hw-core 100 Hz RT) |
+| `ik_dt` | 0.05 s | Differential IK time step |
+| `pos_scale` | 0.5 | Hand tracker → robot position scale |
+| `torso_pos_scale` | 1.0 | Body tracker → torso scale |
+| `use_torso` | False | Body tracker disabled (runtime toggle via `/vive_rby1/set_use_torso`) |
+| `sdk_max_delta_pos` | 0.03 m | Per-frame Cartesian step clamp |
+
+`max_teleop_dq` (1.5 rad/s) is hardcoded in `vive_rby1_node.cpp`.
+
+### Common gotchas / troubleshooting
+
+**Pedal not detected**
+- `groups | grep input` — if missing, `sudo usermod -aG input $USER` and **fully re-login**
+- Check evdev device name: `python3 -c "import evdev; [print(d.name) for d in [evdev.InputDevice(p) for p in evdev.list_devices()]]"`
+
+**Vive trackers not publishing**
+- SteamVR running + all devices green
+- Serial numbers in `trackers.yaml` match actual hardware
+
+**LOST in GUI**
+- SteamVR — line-of-sight occluded? 0.5 s timeout.
+
+**Build fails with empy error**
+- `pip3 install empy==3.3.4` — colcon needs 3.x, not 4.x
+
+**Build fails with conda Python**
+- `conda deactivate` then `which python3` should be `/usr/bin/python3`
+
+**ManusSDK not found**
+- Confirm `ManusSDK/include/ManusSDK.h` and `ManusSDK/lib/libManusSDK_Integrated.so` exist and are non-zero
+
+**`rby1_core_node` services unavailable**
+- Run separately from the hw-core workspace. Without it, mode/move fail but GUI launches.
+
+**Robot trembling**
+- Lower `max_teleop_dq` in `vive_rby1_node.cpp`
+- Lower `ik_dt` in launch (currently 0.05 s)
+- Product of the two is the max Δq per step
+
+### Recent changes (highlights)
+
+- 2026-05-30: keyboard driving defaults 0.05/0.10, q/e direction fix, VLA indicator, battery display
+- 2026-05-29: `Mobile On/Off` button — separates body servo from wheel servo (new hw-core `SetServo.wheel_only`)
+- 2026-05-28: Mobile Base Panel + keyboard driving, runtime accel_limit changes
+- 2026-05-27: `/rby1/cmd/pose` type migrated to `tf2_msgs/TFMessage`
+- 2026-05-22: torso teleop (body tracker → link_torso_5) on/off toggle, Cartesian Impedance Params panel, nullspace ref pose integration
+- 2026-05-21: publish_rate restored to 100 Hz, tracker smoothing alpha 0.9
+
+See [`CHANGES.md`](CHANGES.md) for the full log.

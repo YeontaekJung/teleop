@@ -1,9 +1,18 @@
 """
 scm_gui_node.py  (v3 — service-based interface)
 
-Top:    RB-Y1 area  — connect, status, power/servo/pose controls
-Middle: Joint Position — preset dropdown, joint inputs, execute, save
-Bottom: Teleop area  — node status, pedal, teleop, recording, calibration
+PySide6 메인 윈도우 + 백그라운드 rclpy 노드(ScmGuiNode). 모든 ROS 콜백은 Qt Signal로 UI thread 전달.
+
+레이아웃 (위→아래):
+  Top:    RB-Y1 area    — connect/power/servo/wheel-servo/ctrl-enable/gripper/stop/error-reset/status
+  Middle: Joint Position — preset dropdown(named_poses.yaml), 20 spinbox, Apply/Save
+          Cartesian Impedance Params — joint_limits/nullspace_weights/nullspace_ref + preset I/O
+  Bottom: Teleop area     — node status × 7 그룹, tracker status, recording, calibration
+  Right:  Mobile Base    — QWEASD 키보드 driving + accel_limit 런타임 변경
+
+비실시간 토픽은 depth=1 (2026-05-30) — late callback 누적으로 인한 GUI 렉 방지.
+PySide6 위젯은 UI thread 전용 → ROS 콜백 → Signal.emit → slot 으로 모든 갱신.
+패키지 가이드: DEVELOPER.ko.md
 """
 
 import json

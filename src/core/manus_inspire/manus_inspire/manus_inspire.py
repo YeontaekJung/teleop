@@ -1,3 +1,11 @@
+# manus_inspire.py — Manus glove ergonomic 데이터 → Inspire Hand 6-slot 명령 매핑.
+# 핵심 흐름:
+#   /manus_glove_{0,1} (ManusGlove) → cb_glove → ergonomic 추출
+#     - 캘리브 모드: _collect_sample → _advance_calib (4 phase × 4s = 16s)
+#     - 정상 모드: weighted_flex (MCP×0.25 + PIP×0.55 + DIP×0.20) → flex_to_inspire → InspireHandCtrl
+# 캘리브 단계 의미: 1)open 2)thumbs up 3)thumb spread max 4)thumb bend min
+# 캘리브 결과는 ~/.ros/manus_inspire_calib.yaml에 저장 (재시작 시 자동 로드)
+# 패키지 가이드: DEVELOPER.ko.md
 import os
 import yaml
 import rclpy

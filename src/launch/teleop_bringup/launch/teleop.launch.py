@@ -121,6 +121,7 @@ def generate_launch_description():
                 'torso_pos_scale':    1.0,
                 'use_torso':          False,
                 'sdk_max_delta_pos':  0.03,
+                'cooldown_sec':       0.5,
             }],
         ),
 

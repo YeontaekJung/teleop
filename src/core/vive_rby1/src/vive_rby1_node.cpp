@@ -1,3 +1,13 @@
+// vive_rby1_node.cpp — Vive Tracker 입력 → SDK Cartesian/Impedance 명령 변환 (C++ 프로덕션).
+// 책임:
+//   1) /teleop/tracker/{left,right,body} 트래커 입력 smoothing + 5-state 녹화 상태머신
+//   2) engage() 시점에 ref(트래커 base) + ee_*_0_(로봇 EE FK) 캡처 → delta 계산용 기준
+//   3) onTimer() 100Hz 루프: 트래커 delta → 로봇 좌표(v2r_R_) → ee target → /rby1/cmd/pose (tf2_msgs/TFMessage)
+//   4) doTeleopStart/Stop (detached thread): SetControlMode → MoveToJointPosition → SetNullspaceJointRef → SetStream
+//   5) 3개 페달(A=clutch, B=discard, C=episode toggle) + scm_recording core 서비스 호출
+//   6) (옵션) body tracker → link_torso_5 (use_torso_, 2026-05-22 추가; runtime toggle)
+// 패키지 가이드: DEVELOPER.ko.md
+// Python debug 노드(`vive_rby1_node.py`)는 4개 제어 모드를 지원하나 default launch 미포함.
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -299,6 +309,7 @@ class ViveRby1Node : public rclcpp::Node {
     declare_parameter("pedal_discard_index", 1);
     declare_parameter("pedal_episode_index", 2);
     declare_parameter("tracker_smooth_alpha", 0.9);
+    declare_parameter("cooldown_sec", 0.5);
 
     const auto urdf_path = get_parameter("urdf_path").as_string();
     const auto srdf_path = get_parameter("srdf_path").as_string();
@@ -319,6 +330,7 @@ class ViveRby1Node : public rclcpp::Node {
     pedal_discard_idx_ = static_cast<size_t>(get_parameter("pedal_discard_index").as_int());
     pedal_episode_idx_ = static_cast<size_t>(get_parameter("pedal_episode_index").as_int());
     tracker_smooth_alpha_ = get_parameter("tracker_smooth_alpha").as_double();
+    cooldown_sec_ = get_parameter("cooldown_sec").as_double();
 
     ik_solver_ = std::make_unique<DifferentialIkSolver>(urdf_path, srdf_path);
     RCLCPP_INFO(get_logger(), "[vive_rby1] IK solver ready");
@@ -464,6 +476,10 @@ class ViveRby1Node : public rclcpp::Node {
     }
   }
 
+  // onSetUseTorso — body tracker → link_torso_5 런타임 on/off 토글 (2026-05-22).
+  // OFF 전환: ref_body_/torso5_0_ 리셋 → /rby1/cmd/pose에서 link_torso_5 항목 사라짐 → hw-core가
+  //          마지막 torso 포즈에서 freeze (CartesianImpedance 빌더가 seeded T_torso로 hold).
+  // ON 전환: engage 중이고 트래커 활성이면 현재 torso 포즈 기준으로 재캡처 → 부드러운 합류.
   void onSetUseTorso(
       const std::shared_ptr<std_srvs::srv::SetBool::Request> req,
       std::shared_ptr<std_srvs::srv::SetBool::Response> res)
@@ -525,6 +541,10 @@ class ViveRby1Node : public rclcpp::Node {
     pedal_episode_prev_ = episode_pressed;
   }
 
+  // engage — 페달 A 또는 GUI 클러치 토글 시 호출.
+  // 트래커 기준점(ref_*)과 로봇 EE 기준점(ee_*_0_/sdk_ee_*_0_)을 캡처해 이후 delta 계산의 origin으로 사용.
+  // SDK FK ↔ pinocchio FK 사이 측정 Z 오프셋 보정(+0.039m left / +0.026m right) 적용.
+  // engage 시점에 body tracker가 미가용이면 onTrackerBody에서 늦은 재캡처(2026-05-22)됨.
   void engage() {
     if (!tracker_l_.smoothed || !tracker_r_.smoothed) {
       RCLCPP_WARN(get_logger(), "Trackers not ready -- ignoring engage");
@@ -546,6 +566,7 @@ class ViveRby1Node : public rclcpp::Node {
     sdk_ee_l_0_->translation().z() += 0.039;
     sdk_prev_l_.reset();
     sdk_prev_r_.reset();
+    cooldown_ticks_ = 0;  // 진행 중인 disengage hold를 즉시 종료, 재engage가 우선
     engaged_ = true;
     publishClutchState();
     RCLCPP_INFO(get_logger(), "Clutch ENGAGED");
@@ -560,8 +581,12 @@ class ViveRby1Node : public rclcpp::Node {
     sdk_prev_r_.reset();
     ref_body_.reset();
     torso5_0_.reset();
+    // 펌웨어가 마지막 트래커 delta가 반영된 캐시 target까지 velocity-limited로
+    // 추종하며 생기는 잔여 모션을 막기 위해, 잠시 현재 FK pose를 hold-publish해
+    // hw-core의 캐시 target을 실제 EE 위치로 snap시킨다(대칭: warmup_ticks_).
+    cooldown_ticks_ = static_cast<int>(std::round(cooldown_sec_ * publish_rate_));
     publishClutchState();
-    RCLCPP_INFO(get_logger(), "Clutch DISENGAGED");
+    RCLCPP_INFO(get_logger(), "Clutch DISENGAGED (cooldown=%d ticks)", cooldown_ticks_);
     if (rec_state_ == kRecRecording) {
       callTogglePause();
     }
@@ -734,7 +759,7 @@ class ViveRby1Node : public rclcpp::Node {
     // Step 2: Move to teleop pose
     auto r2 = std::make_shared<MoveToJointPosition::Request>();
     r2->target = teleop_pose_;
-    r2->min_time = 5.0;
+    r2->min_time = 0.0;  // let on_move_to_joint_position use proportional time (floor 1.5 s)
     auto f2 = cli_move_joint_->async_send_request(r2);
     if (f2.wait_for(30s) != std::future_status::ready) {
       RCLCPP_ERROR(get_logger(), "[vive_rby1] doTeleopStart: MoveToJointPosition timeout");
@@ -749,6 +774,8 @@ class ViveRby1Node : public rclcpp::Node {
     }
     RCLCPP_INFO(get_logger(), "[vive_rby1] doTeleopStart: at teleop pose, starting stream");
 
+    // 2026-05-22 추가: GUI 드롭다운 미조작 시에도 teleop_pose_가 hw-core의 nullspace_ref와
+    // 일치하도록 stream 시작 직전에 재전송. 첫 CartesianImpedance tick부터 올바른 nullspace 적용.
     // Re-assert the nullspace reference so it matches the pose we just moved to,
     // even if the GUI never pushed it (or the service wasn't ready at selection
     // time). Sent before the stream so the first CartesianImpedance tick uses it.
@@ -800,7 +827,7 @@ class ViveRby1Node : public rclcpp::Node {
 
     auto r2 = std::make_shared<MoveToJointPosition::Request>();
     r2->target = teleop_pose_;
-    r2->min_time = 5.0;
+    r2->min_time = 0.0;  // proportional time, floor 1.5 s
     auto f2 = cli_move_joint_->async_send_request(r2);
     if (f2.wait_for(30s) != std::future_status::ready) {
       RCLCPP_ERROR(get_logger(), "[vive_rby1] doTeleopStop: MoveToJointPosition timeout");
@@ -923,6 +950,23 @@ class ViveRby1Node : public rclcpp::Node {
 
     if (warmup_ticks_ > 0) {
       --warmup_ticks_;
+      if (last_ee_pose_ && last_ee_pose_->poses.size() >= 2) {
+        tf2_msgs::msg::TFMessage hold;
+        const rclcpp::Time stamp = now();
+        hold.transforms.reserve(2);
+        hold.transforms.push_back(makeTransformStamped(
+          "ee_right", poseToTransform(last_ee_pose_->poses[0]), stamp));
+        hold.transforms.push_back(makeTransformStamped(
+          "ee_left",  poseToTransform(last_ee_pose_->poses[1]), stamp));
+        pub_pose_cmd_->publish(hold);
+      }
+      return;
+    }
+
+    // disengage 직후 cooldown: 현재 FK pose를 hold-publish해 hw-core의 캐시 target을
+    // 실제 EE 위치로 덮어써(has_new=true) 펌웨어 잔여 모션을 즉시 정지시킨다.
+    if (cooldown_ticks_ > 0) {
+      --cooldown_ticks_;
       if (last_ee_pose_ && last_ee_pose_->poses.size() >= 2) {
         tf2_msgs::msg::TFMessage hold;
         const rclcpp::Time stamp = now();
@@ -1086,6 +1130,7 @@ class ViveRby1Node : public rclcpp::Node {
   }();
   bool mirror_mode_{false};
   int warmup_ticks_{0};
+  int cooldown_ticks_{0};   // disengage 직후 현재 FK pose를 hold-publish하는 잔여 틱
   bool teleop_active_{false};
   bool engaged_{false};
   bool pedal_engage_prev_{false};
@@ -1100,6 +1145,7 @@ class ViveRby1Node : public rclcpp::Node {
   double sdk_max_delta_pos_{0.03};
   double sdk_max_delta_rot_{20.0 * kPi / 180.0};
   double tracker_smooth_alpha_{0.9};
+  double cooldown_sec_{0.5};   // disengage hold 지속 시간(초). 0이면 비활성
   size_t pedal_engage_idx_{0};
   size_t pedal_discard_idx_{1};
   size_t pedal_episode_idx_{2};
