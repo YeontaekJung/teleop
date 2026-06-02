@@ -2,6 +2,21 @@
 
 ## 2026-06-02
 
+### vive_rby1: FK 백엔드를 rby1-sdk GetDynamics()로 통일 + 외부 IK 자산 제거
+
+- **배경:** `vive_rby1_node`(C++ 프로덕션)는 이미 SDK 내부 IK만 사용(`/rby1/cmd/pose` 스트리밍, IK는 hw-core가 해결)하면서도, engage 시점 FK 기준점 계산을 위해 별도의 **pinocchio + 로컬 `robot_description/` URDF 사본**을 유지했다. 이로 인해 (1) 모델 이중관리, (2) pinocchio FK ↔ SDK FK 불일치를 메우는 `engage()`의 하드코딩 Z 오프셋(+2.6cm 우 / +3.9cm 좌), (3) 외부 IK(pink) 자산(`rby1_ik` 패키지 + Python 디버그 노드)·죽은 IK 코드 잔존 문제가 있었다.
+- **변경 (`src/core/vive_rby1/src/vive_rby1_node.cpp`):**
+  - pinocchio `DifferentialIkSolver`(FK 전용으로만 쓰이던 클래스)를 `SdkFkSolver`로 교체. 노드 시작 시 백그라운드 스레드에서 `Robot<A|M>::Create(addr)`+`Connect()`+`GetDynamics()`로 **hw-core와 동일한 온보드 모델**을 받아 `MakeState({"base","ee_right","ee_left","link_torso_5"}, kRobotJointNames)` → `ComputeForwardKinematics`/`ComputeTransformation`으로 FK 수행. rby1_core_node보다 늦게 떠도 2초 간격 재시도.
+  - FK가 hw-core와 일치하므로 engage의 **Z 오프셋 보정 제거**. engage/onMirrorMode의 `tracker_left/right` 프레임 FK는 `ee_left/right`로 대체(수식상 상쇄되어 동작 동일).
+  - `/rby1/state/ee_pose` **구독 제거** — warmup/cooldown hold를 로컬 FK(`publishEeHold`)로 계산.
+  - pinocchio 전면 제거: 경량 로컬 `SE3` 구조체로 교체(텔레옵 SE3 수식은 그대로). 죽은 코드 제거(`solveToQ20`/`currentQ20`/`ik_dt`/`srdf`/미사용 joint-name 헬퍼).
+  - **신규 파라미터:** `robot_address`(기본 `localhost:50051`), `robot_model`(`a`|`m`). 제거: `urdf_path`/`srdf_path`/`ik_dt`.
+- **빌드(`CMakeLists.txt`/`package.xml`):** `find_package(rby1-sdk REQUIRED)`+`Threads` 추가, `rby1-sdk::rby1-sdk` 링크. pinocchio/ament_index_cpp/ament_cmake_python 의존 제거. hw-core처럼 `--cmake-args -DCMAKE_PREFIX_PATH=<rby1-sdk build>` 필요.
+- **제거된 자산:** `src/core/vive_rby1/{vive_rby1/,scripts/,setup.py,setup.cfg,resource/}`(Python 디버그 노드+패키징), `src/core/rby1_ik/`(pink IK 패키지, 디버그 노드 외 소비자 없음), `robot_description/`(로컬 URDF/SRDF 사본). 디버그 노드/rby1_ik는 default launch·GUI 어디서도 참조되지 않아 프로덕션 무영향.
+- **launch(`teleop_bringup/launch/teleop.launch.py`):** `urdf_path`/`srdf_path` 인자 제거, `robot_address`/`robot_model` 추가 및 vive_rby1_node 전달.
+- **참고:** hand 정보는 teleop FK에 불필요(hand는 ee_* 프레임보다 말단이라 기구학 FK에 영향 없음). vive_rby1_node가 로봇에 2번째 gRPC 연결을 여는 점은 정적 모델만 받으므로 무해.
+- **검증:** Docker colcon `--packages-select vive_rby1`(+rby1-sdk PREFIX) 빌드 후 전체 빌드(rby1_ik 삭제로 끊기는 의존 없음). 실로봇: vive_rby1_node `SDK dynamics ready` 로그, engage 시 점프 없이 hw-core FK와 일치(`/rby1/cmd/pose`≈`/rby1/state/ee_pose`), warmup/cooldown hold 정상, `ros2 node info`에 `/rby1/state/ee_pose` 구독 없음 확인.
+
 ### scm_gui: Nullspace Ref Pose 드롭다운에 안내 문구 추가
 
 - **배경:** GUI "Nullspace Ref Pose" 드롭다운의 "Apply Ref Pose"(`_on_apply_ns_ref`)는 `/rby1/set_nullspace_joint_ref`뿐 아니라 `/vive_rby1/set_teleop_pose`도 함께 호출해 `teleop_pose_`(Teleop Start / Pedal C 시 로봇이 이동하는 joint target)까지 덮어쓴다. 즉 이 드롭다운이 사실상 teleop 시작 자세 선택을 겸하지만 화면상 안내가 없었고, 드롭다운만 바꾸고 Apply를 누르지 않으면 적용되지 않는다는 점도 표시되지 않았다.

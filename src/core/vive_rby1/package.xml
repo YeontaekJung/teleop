@@ -11,10 +11,8 @@
   <license>MIT</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
-  <buildtool_depend>ament_cmake_python</buildtool_depend>
   <buildtool_depend>eigen3_cmake_module</buildtool_depend>
 
-  <depend>ament_index_cpp</depend>
   <depend>rclcpp</depend>
   <depend>geometry_msgs</depend>
   <depend>sensor_msgs</depend>
@@ -24,10 +22,9 @@
   <depend>scm_recording_msgs</depend>
   <depend>tf2_msgs</depend>
   <depend>eigen</depend>
-  <depend>pinocchio</depend>
 
-  <exec_depend>rclpy</exec_depend>
-  <exec_depend>rby1_ik</exec_depend>
+  <!-- rby1-sdk (dynamics model for FK) is found via find_package, not ament;
+       no package.xml dependency, mirroring hw-core/rby1_core. -->
 
   <export>
     <build_type>ament_cmake</build_type>

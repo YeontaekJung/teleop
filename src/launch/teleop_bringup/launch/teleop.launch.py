@@ -12,17 +12,13 @@ def generate_launch_description():
     use_manus = LaunchConfiguration('use_manus')
     use_pedal = LaunchConfiguration('use_pedal')
     use_vive  = LaunchConfiguration('use_vive')
-    urdf_path = LaunchConfiguration('urdf_path')
-    srdf_path = LaunchConfiguration('srdf_path')
+    robot_address = LaunchConfiguration('robot_address')
+    robot_model   = LaunchConfiguration('robot_model')
 
     not_sim   = NotSubstitution(sim)
     pedal_on  = AndSubstitution(use_pedal, not_sim)
     vive_on   = AndSubstitution(use_vive,  not_sim)
     manus_on  = AndSubstitution(use_manus, not_sim)
-
-    _share = get_package_share_directory('vive_rby1')
-    _default_urdf = os.path.join(_share, 'robot_description', 'rby1', 'rby1.urdf')
-    _default_srdf = os.path.join(_share, 'robot_description', 'rby1', 'rby1.srdf')
 
     _vive_share    = get_package_share_directory('vive_ros2')
     _trackers_yaml = os.path.join(_vive_share, 'config', 'trackers.yaml')
@@ -31,14 +27,14 @@ def generate_launch_description():
 
         # ── Launch arguments ───────────────────────────────────────────────
         DeclareLaunchArgument(
-            'urdf_path',
-            default_value=_default_urdf,
-            description='Absolute path to rby1.urdf (override with urdf_path:=<path>)'),
+            'robot_address',
+            default_value='localhost:50051',
+            description='rby1-sdk gRPC address for vive_rby1_node FK model (GetDynamics)'),
 
         DeclareLaunchArgument(
-            'srdf_path',
-            default_value=_default_srdf,
-            description='Absolute path to rby1.srdf (override with srdf_path:=<path>)'),
+            'robot_model',
+            default_value='a',
+            description='Robot model for FK: "a" (2-wheel) | "m" (mecanum)'),
 
         DeclareLaunchArgument(
             'sim',
@@ -113,10 +109,9 @@ def generate_launch_description():
             name='vive_rby1_node',
             output='screen',
             parameters=[{
-                'urdf_path':          urdf_path,
-                'srdf_path':          srdf_path,
+                'robot_address':      robot_address,
+                'robot_model':        robot_model,
                 'publish_rate':       100.0,
-                'ik_dt':              0.05,
                 'pos_scale':          0.5,
                 'torso_pos_scale':    1.0,
                 'use_torso':          False,

@@ -1,20 +1,24 @@
+# Reference parameter file for vive_rby1_node.
+# NOTE: the default launch (teleop_bringup) passes parameters inline and does NOT
+# load this file. Kept as documentation / for standalone `ros2 run` use.
 vive_rby1_node:
   ros__parameters:
-    urdf_path: "/path/to/robot_description/rby1/rby1.urdf"
-    srdf_path: "/path/to/robot_description/rby1/rby1.srdf"
+    # rby1-sdk dynamics model source (FK via Robot::GetDynamics()).
+    # Must match the robot hw-core connects to so FK stays consistent.
+    robot_address: "localhost:50051"
+    robot_model: "a"   # "a" (differential 2-wheel) | "m" (mecanum 4-wheel)
 
     topic_tracker_left: "/teleop/tracker/left"
     topic_tracker_right: "/teleop/tracker/right"
+    topic_tracker_body: "/teleop/tracker/body"
     topic_pedal: "/teleop/pedal"
-    topic_joint_state: "/rby1_status_joint"
-    topic_teleop_command: "/rby1_teleop_command"
+    topic_joint_state: "/rby1/state/joint"
 
     pos_scale: 1.0
     # body tracker → torso position scale (applied to the torso delta)
     torso_pos_scale: 1.0
     # enable torso (body tracker) teleop; runtime toggle via /vive_rby1/set_use_torso (std_srvs/SetBool)
     use_torso: false
-    ik_dt: 0.05
     publish_rate: 100.0
     sdk_max_delta_pos: 0.03
     sdk_max_delta_rot_deg: 20.0
@@ -23,4 +27,6 @@ vive_rby1_node:
     tracker_smooth_alpha: 0.5
 
     pedal_engage_index: 0
+    pedal_discard_index: 1
     pedal_episode_index: 2
+    cooldown_sec: 0.5

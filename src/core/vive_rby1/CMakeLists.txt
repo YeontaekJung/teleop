@@ -6,8 +6,6 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 endif()
 
 find_package(ament_cmake REQUIRED)
-find_package(ament_index_cpp REQUIRED)
-find_package(ament_cmake_python REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
@@ -17,24 +15,26 @@ find_package(rby1_core_msgs REQUIRED)
 find_package(scm_recording_msgs REQUIRED)
 find_package(tf2_msgs REQUIRED)
 find_package(Eigen3 REQUIRED)
-find_package(pinocchio REQUIRED)
+
+# ─── Find rby1-sdk ───────────────────────────────────────────────────────────
+# Provides the dynamics model used for forward kinematics (Robot::GetDynamics()).
+# If not found, pass the SDK build dir, e.g.:
+#   colcon build --cmake-args -DCMAKE_PREFIX_PATH=/path/to/rby1-sdk-*/build
+find_package(rby1-sdk REQUIRED)
+find_package(Threads REQUIRED)
 
 add_executable(vive_rby1_node
   src/vive_rby1_node.cpp
 )
 
 target_compile_features(vive_rby1_node PUBLIC cxx_std_17)
-target_link_libraries(vive_rby1_node Eigen3::Eigen)
-
-if(TARGET pinocchio::pinocchio)
-  target_link_libraries(vive_rby1_node pinocchio::pinocchio)
-else()
-  target_include_directories(vive_rby1_node PRIVATE ${pinocchio_INCLUDE_DIRS})
-  target_link_libraries(vive_rby1_node ${pinocchio_LIBRARIES})
-endif()
+target_link_libraries(vive_rby1_node
+  Eigen3::Eigen
+  rby1-sdk::rby1-sdk
+  Threads::Threads
+)
 
 ament_target_dependencies(vive_rby1_node
-  ament_index_cpp
   rclcpp
   geometry_msgs
   sensor_msgs
@@ -45,22 +45,11 @@ ament_target_dependencies(vive_rby1_node
   tf2_msgs
 )
 
-ament_python_install_package(${PROJECT_NAME})
-
 install(TARGETS vive_rby1_node
   DESTINATION lib/${PROJECT_NAME}
 )
 
-install(PROGRAMS
-  scripts/vive_rby1_debug_node
-  DESTINATION lib/${PROJECT_NAME}
-)
-
 install(DIRECTORY config
-  DESTINATION share/${PROJECT_NAME}
-)
-
-install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../../../robot_description
   DESTINATION share/${PROJECT_NAME}
 )
 

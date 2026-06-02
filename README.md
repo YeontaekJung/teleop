@@ -23,9 +23,8 @@ teleop/
     │   ├── vive_ros2/                             OpenVR → /teleop/tracker/{left,right,body}
     │   └── manus_ros2/                            Manus SDK → /manus_glove_*
     ├── core/                                      변환·매핑 노드
-    │   ├── vive_rby1/                             트래커 → SDK Cartesian 명령 + 녹화 상태머신 (C++ 프로덕션 + Python 디버그)
-    │   ├── manus_inspire/                         Manus glove → Inspire Hand 명령 + 4-phase 캘리브
-    │   └── rby1_ik/                               (Legacy) pink IK 헬퍼 — debug 노드 전용
+    │   ├── vive_rby1/                             트래커 → SDK Cartesian 명령 + 녹화 상태머신 (C++; FK는 rby1-sdk GetDynamics)
+    │   └── manus_inspire/                         Manus glove → Inspire Hand 명령 + 4-phase 캘리브
     ├── gui/scm_gui/                               PySide6 GUI (스코프: 모든 라이프사이클 + 모니터링)
     ├── launch/teleop_bringup/                     전체 시스템 launch
     └── msgs/                                      메시지 패키지 5개
@@ -260,7 +259,7 @@ teleop/
 ├── CHANGES.md                                  changelog
 └── src/
     ├── input/{pedal_ros2, vive_ros2, manus_ros2}                input device drivers
-    ├── core/{vive_rby1, manus_inspire, rby1_ik}                 mapping/conversion nodes
+    ├── core/{vive_rby1, manus_inspire}                          mapping/conversion nodes
     ├── gui/scm_gui                                                PySide6 GUI
     ├── launch/teleop_bringup                                      full-system launch
     └── msgs/                                                      5 message packages
