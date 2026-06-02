@@ -1175,6 +1175,15 @@ class TeleopGuiWindow(QWidget):
             self._cmb_ns_ref.setCurrentText(self._current_teleop_pose)
         self._cmb_ns_ref.currentTextChanged.connect(self._on_imp_param_changed)
         ns_ref_vbox.addWidget(self._cmb_ns_ref)
+        ns_ref_hint = QLabel(
+            'This pose is also the Teleop Start pose:'
+            'On Teleop Start / Pedal C the robot first moves here, '
+            'then biases IK toward this configuration in the '
+            'nullspace during Cartesian impedance.')
+        ns_ref_hint.setFont(QFont('Monospace', 8))
+        ns_ref_hint.setStyleSheet('color: #555555;')
+        ns_ref_hint.setWordWrap(True)
+        ns_ref_vbox.addWidget(ns_ref_hint)
         ns_ref_vbox.addStretch()
         cols.addLayout(ns_ref_vbox, stretch=1)
 

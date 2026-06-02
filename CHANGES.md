@@ -2,6 +2,15 @@
 
 ## 2026-06-02
 
+### scm_gui: Nullspace Ref Pose 드롭다운에 안내 문구 추가
+
+- **배경:** GUI "Nullspace Ref Pose" 드롭다운의 "Apply Ref Pose"(`_on_apply_ns_ref`)는 `/rby1/set_nullspace_joint_ref`뿐 아니라 `/vive_rby1/set_teleop_pose`도 함께 호출해 `teleop_pose_`(Teleop Start / Pedal C 시 로봇이 이동하는 joint target)까지 덮어쓴다. 즉 이 드롭다운이 사실상 teleop 시작 자세 선택을 겸하지만 화면상 안내가 없었고, 드롭다운만 바꾸고 Apply를 누르지 않으면 적용되지 않는다는 점도 표시되지 않았다.
+- **변경 (`src/gui/scm_gui/scm_gui/scm_gui_node.py`):** 드롭다운(`_cmb_ns_ref`) 아래, `addStretch()` 앞에 helper `QLabel` 2개 추가(`QFont('Monospace', 8)`, `color: #555555`, `setWordWrap(True)` — 기존 helper 스타일 일치).
+  - 라인1: teleop 시작 자세 겸용 + nullspace 역할 설명 ("Also the Teleop Start pose: ... biases IK toward this configuration in the nullspace ... (does not move the end-effector).")
+  - 라인2: Apply 안내 ("Click 'Apply Ref Pose' to apply — changing the selection alone has no effect.")
+- **동작 변경 없음.** 표시 문구만 추가.
+- **검증:** GUI-only(호스트 colcon 불가, Docker 전용). `scm_gui` 실행 후 드롭다운 아래 회색 안내 2줄이 컬럼 폭 내에서 줄바꿈되어 표시되는지 육안 확인.
+
 ### vive_rby1: disengage 직후 EE 잔여 모션 제거 (cooldown hold)
 
 - **배경:** pedal A 해제(disengage) 시 `vive_rby1`는 `/rby1/cmd/pose` publish만 멈출 뿐, hw-core stream loop는 마지막 캐시 target(`T_r/T_l`)을 100Hz로 펌웨어에 계속 재전송한다. 빠른 트래커 모션 끝에서 손을 떼면 펌웨어 CartesianImpedance가 그 캐시 target까지 velocity-limited(`ee_lin_vel=0.4 m/s`)로 추종하며 ~1초간 팔이 미끄러지는 잔여 모션 발생. legacy/현재 공통 약점(전용 freeze 명령 부재, 펌웨어 hold-time에만 의존).
