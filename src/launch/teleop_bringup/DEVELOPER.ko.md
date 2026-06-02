@@ -56,11 +56,6 @@ ros2 launch teleop_bringup teleop.launch.py use_pedal:=false
 
 # Vive trackers 없이 (Manus는 사용)
 ros2 launch teleop_bringup teleop.launch.py use_vive:=false
-
-# 로봇 주소/모델 명시 (FK용 SDK 모델 소스)
-ros2 launch teleop_bringup teleop.launch.py \
-  robot_address:=192.168.30.1:50051 \
-  robot_model:=a
 ```
 
 ---
@@ -69,8 +64,6 @@ ros2 launch teleop_bringup teleop.launch.py \
 
 | 인자 | 기본 | 의미 |
 |---|---|---|
-| `robot_address` | `localhost:50051` | vive_rby1_node가 FK 모델을 받을 rby1-sdk gRPC 주소 (`GetDynamics()`). hw-core가 연결하는 로봇과 동일해야 FK 일치 |
-| `robot_model` | `a` | FK 모델 선택: `a`(2륜) \| `m`(메카넘) |
 | `sim` | `false` | true면 모든 하드웨어 입력 노드 비활성 |
 | `use_manus` | `true` | Manus glove + manus_inspire 활성 |
 | `use_pedal` | `true` | 페달 활성 (sim=true시 무시) |
@@ -106,8 +99,6 @@ _trackers_yaml = os.path.join(get_package_share_directory('vive_ros2'), 'config'
 
 | 파라미터 | 값 | 의미 |
 |---|---|---|
-| `robot_address` | launch 인자 | rby1-sdk gRPC 주소 (FK 모델 `GetDynamics()`) |
-| `robot_model` | launch 인자 | FK 모델 `a`\|`m` |
 | `publish_rate` | `100.0` Hz | EE 명령 publish 주기 (hw-core RT 100Hz와 매치) |
 | `pos_scale` | `0.5` | tracker→robot 위치 스케일 (hand) |
 | `torso_pos_scale` | `1.0` | body tracker 위치 스케일 (torso) |
@@ -145,7 +136,7 @@ ROS2 launch는 모든 `Node`를 비동기 병렬 시작. 명시적 순서가 없
 
 ## 8. 흔한 함정
 
-- **`robot_address` 도달 불가**: vive_rby1_node는 FK 모델을 `GetDynamics()`로 받으므로 로봇(또는 rby1_core_node)이 떠 있어야 한다. 연결 전까지는 2초 간격 재시도 로그(`SDK dynamics connect failed ... retrying`)만 찍히고 engage 시 `SDK dynamics model not ready yet` 경고. 주소는 hw-core가 연결하는 로봇과 동일해야 FK가 일치(불일치 시 engage 점프). 로봇 모델이 메카넘이면 `robot_model:=m`.
+- **engage가 안 됨 (EE pose 미수신)**: vive_rby1_node는 FK 기준을 `/rby1/state/pose`(hw-core 발행) 구독으로 받는다. rby1_core_node가 떠 FK를 발행 중이고 외부 PC↔로봇 ROS2 링크가 정상이어야 한다. 미수신 시 engage가 `EE pose ... not received yet`로 보류된다. (vive_rby1은 로봇 gRPC에 연결하지 않으므로 외부 PC에서도 동작.)
 - **`sim:=true` 의미 오해**: 시뮬레이터 자동 실행이 아니라 입력 노드 끄기. 실제 시뮬레이터는 별도 docker container 또는 host 프로세스 필요.
 - **`use_vive:=false`인데 vive_rby1_node 시작**: 의도된 동작. vive_rby1은 트래커 없이도 (engage 불가) 시작. GUI에서 vive 노드 빨강 표시.
 - **launch 인자 → 노드 파라미터 전달 누락**: `vive_rby1_node`의 파라미터 dict를 추가/수정한 후 source + relaunch.

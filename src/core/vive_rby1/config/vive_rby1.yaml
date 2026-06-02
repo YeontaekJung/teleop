@@ -3,16 +3,13 @@
 # load this file. Kept as documentation / for standalone `ros2 run` use.
 vive_rby1_node:
   ros__parameters:
-    # rby1-sdk dynamics model source (FK via Robot::GetDynamics()).
-    # Must match the robot hw-core connects to so FK stays consistent.
-    robot_address: "localhost:50051"
-    robot_model: "a"   # "a" (differential 2-wheel) | "m" (mecanum 4-wheel)
+    # hw-core FK reference (tf2_msgs/TFMessage, child_frame_id ee_right/ee_left/link_torso_5).
+    topic_state_pose: "/rby1/state/pose"
 
     topic_tracker_left: "/teleop/tracker/left"
     topic_tracker_right: "/teleop/tracker/right"
     topic_tracker_body: "/teleop/tracker/body"
     topic_pedal: "/teleop/pedal"
-    topic_joint_state: "/rby1/state/joint"
 
     pos_scale: 1.0
     # body tracker → torso position scale (applied to the torso delta)

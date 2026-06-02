@@ -16,13 +16,6 @@ find_package(scm_recording_msgs REQUIRED)
 find_package(tf2_msgs REQUIRED)
 find_package(Eigen3 REQUIRED)
 
-# ─── Find rby1-sdk ───────────────────────────────────────────────────────────
-# Provides the dynamics model used for forward kinematics (Robot::GetDynamics()).
-# If not found, pass the SDK build dir, e.g.:
-#   colcon build --cmake-args -DCMAKE_PREFIX_PATH=/path/to/rby1-sdk-*/build
-find_package(rby1-sdk REQUIRED)
-find_package(Threads REQUIRED)
-
 add_executable(vive_rby1_node
   src/vive_rby1_node.cpp
 )
@@ -30,8 +23,6 @@ add_executable(vive_rby1_node
 target_compile_features(vive_rby1_node PUBLIC cxx_std_17)
 target_link_libraries(vive_rby1_node
   Eigen3::Eigen
-  rby1-sdk::rby1-sdk
-  Threads::Threads
 )
 
 ament_target_dependencies(vive_rby1_node

@@ -23,9 +23,6 @@
   <depend>tf2_msgs</depend>
   <depend>eigen</depend>
 
-  <!-- rby1-sdk (dynamics model for FK) is found via find_package, not ament;
-       no package.xml dependency, mirroring hw-core/rby1_core. -->
-
   <export>
     <build_type>ament_cmake</build_type>
   </export>

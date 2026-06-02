@@ -10,9 +10,9 @@
 
 | 실행 노드 | 언어 | 용도 | 기본 launch 포함? |
 |---|---|---|---|
-| `vive_rby1_node` | C++ (rby1-sdk dynamics FK) | **프로덕션 노드.** 트래커 → SDK Cartesian/Impedance 명령 (`/rby1/cmd/pose`). 녹화 상태 머신. body tracker → torso. | ✓ |
+| `vive_rby1_node` | C++ (FK from `/rby1/state/pose`) | **프로덕션 노드.** 트래커 → SDK Cartesian/Impedance 명령 (`/rby1/cmd/pose`). 녹화 상태 머신. body tracker → torso. | ✓ |
 
-> FK는 `Robot::GetDynamics()`로 받는 **hw-core와 동일한 온보드 모델**에서 계산한다(pinocchio·로컬 URDF 불필요). 과거의 Python 디버그 노드(`vive_rby1_debug_node`)와 외부 IK(pink) 패키지 `rby1_ik`는 2026-06-02 제거됨 — 외부 IK를 쓰지 않고 SDK 내부 IK만 사용하기 때문.
+> EE/torso FK 기준은 hw-core가 ROS2로 발행하는 **`/rby1/state/pose`**(`tf2_msgs/TFMessage`, child_frame_id `ee_right`/`ee_left`/`link_torso_5`)를 구독해 얻는다 — 외부 PC에서도 동작(로봇 gRPC 불필요), 소스가 hw-core FK로 통일되어 Z 오프셋 보정 불필요. 로컬 IK/FK(pinocchio·SDK·URDF) 일체 없음. 과거의 Python 디버그 노드(`vive_rby1_debug_node`)와 외부 IK(pink) 패키지 `rby1_ik`는 2026-06-02 제거됨.
 
 핵심 책임:
 - HTC Vive Tracker 3.0 두 개(좌/우 손) + 옵션 body tracker 입력 수신, smoothing
@@ -28,7 +28,7 @@
 
 ```
 src/core/vive_rby1/
-├── CMakeLists.txt                              C++ 노드 빌드 (rby1-sdk 링크)
+├── CMakeLists.txt                              C++ 노드 빌드 (순수 ROS2 + Eigen)
 ├── package.xml                                 ament_cmake
 ├── config/
 │   └── vive_rby1.yaml                          (참고용 — 실제 권위는 launch dict)
@@ -43,7 +43,7 @@ src/core/vive_rby1/
 ### 3.1 의존성
 
 - ROS2 Humble + `colcon`
-- `rby1-sdk` — FK용 dynamics 모델 (`find_package(rby1-sdk)`로 탐색; hw-core와 동일). pinocchio 불필요.
+- Eigen3 (텔레옵 SE3 수식). **rby1-sdk·pinocchio 불필요** — FK는 hw-core가 `/rby1/state/pose`로 발행.
 - 자매 패키지: `rby1_core_msgs`, `scm_recording_msgs` (teleop msgs)
 
 ### 3.2 빌드
@@ -51,19 +51,15 @@ src/core/vive_rby1/
 ```bash
 cd teleop
 source /opt/ros/humble/setup.bash
-# rby1-sdk가 자동 탐색되지 않으면 빌드 디렉토리를 PREFIX로 전달 (hw-core와 동일)
-colcon build --packages-select vive_rby1 \
-  --cmake-args -DCMAKE_PREFIX_PATH=/path/to/rby1-sdk-*/build
+colcon build --packages-select vive_rby1
 source install/setup.bash
 ```
 
 ### 3.3 실행
 
 ```bash
-# 프로덕션 (default launch에 포함됨)
-ros2 run vive_rby1 vive_rby1_node --ros-args \
-  -p robot_address:=192.168.30.1:50051 \
-  -p robot_model:=a
+# 프로덕션 (default launch에 포함됨). FK 기준은 /rby1/state/pose 구독으로 자동.
+ros2 run vive_rby1 vive_rby1_node
 
 # 또는 launch
 ros2 launch teleop_bringup teleop.launch.py
@@ -77,8 +73,7 @@ ros2 launch teleop_bringup teleop.launch.py
 
 ```cpp
 namespace {
-  struct SE3 { ... };                  // 경량 rigid transform (pinocchio::SE3 대체)
-  class SdkFkSolver { ... };           // rby1-sdk GetDynamics() 기반 FK 제공자
+  struct SE3 { ... };                  // 경량 rigid transform (Eigen 기반; pinocchio 대체)
   class ViveRby1Node : public rclcpp::Node {
     ...
   };
@@ -86,7 +81,7 @@ namespace {
 int main(...) { rclcpp::spin(make_shared<ViveRby1Node>()); }
 ```
 
-`SdkFkSolver`는 노드 시작 시 백그라운드 스레드에서 `Robot<A|M>::Create(robot_address)` → `Connect()` → `GetDynamics()`로 hw-core와 동일한 온보드 모델을 받고, `MakeState({"base","ee_right","ee_left","link_torso_5"}, kRobotJointNames)` → `ComputeForwardKinematics`/`ComputeTransformation`으로 **FK만** 제공한다(IK는 hw-core가 수행). 로봇이 늦게 떠도 2초 간격 재시도하며, 연결 전에는 FK가 `std::nullopt`를 반환해 engage가 보류된다. 모델이 hw-core와 동일하므로 과거의 Z 오프셋 보정이 불필요하다.
+FK 제공자 클래스가 없다. EE/torso FK 기준은 `onStatePose`가 `/rby1/state/pose`(`tf2_msgs/TFMessage`)를 구독해 `child_frame_id`별로 `last_ee_r_`/`last_ee_l_`/`last_torso_`(`std::optional<SE3>`)에 캐시한다. engage 기준점·warmup/cooldown hold·각종 재캡처는 모두 이 캐시를 읽으므로 소스가 hw-core FK로 통일된다(과거 Z 오프셋 보정 불필요). EE pose 미수신 시 engage는 보류된다. IK는 hw-core가 수행.
 
 ### 4.2 ROS 인터페이스 (이 노드)
 
@@ -94,13 +89,11 @@ int main(...) { rclcpp::spin(make_shared<ViveRby1Node>()); }
 
 | 파라미터 | 기본 | 단위 | 의미 |
 |---|---|---|---|
-| `robot_address` | `localhost:50051` | string | FK 모델용 rby1-sdk gRPC 주소 (`GetDynamics()`). hw-core가 연결하는 로봇과 동일해야 함 |
-| `robot_model` | `a` | string | FK 모델 `a`(2륜) \| `m`(메카넘) |
+| `topic_state_pose` | `/rby1/state/pose` | string | hw-core FK 기준(`tf2_msgs/TFMessage`, child_frame_id ee_right/ee_left/link_torso_5) |
 | `topic_tracker_left` | `/teleop/tracker/left` | string | vive_ros2 출력 |
 | `topic_tracker_right` | `/teleop/tracker/right` | string | 동일 |
 | `topic_tracker_body` | `/teleop/tracker/body` | string | (옵션) body tracker |
 | `topic_pedal` | `/teleop/pedal` | string | pedal_ros2 출력 |
-| `topic_joint_state` | `/rby1/state/joint` | string | hw-core 인코더 |
 | `pos_scale` | `0.5` | unitless | 트래커 → 로봇 위치 스케일 (hand trackers) |
 | `torso_pos_scale` | `1.0` | unitless | body tracker → torso 위치 스케일 |
 | `use_torso` | `false` | bool | body tracker → link_torso_5 활성화. **runtime toggle**: `/vive_rby1/set_use_torso` |
@@ -118,11 +111,11 @@ int main(...) { rclcpp::spin(make_shared<ViveRby1Node>()); }
 |---|---|---|
 | `/teleop/tracker/{left,right,body}` | `geometry_msgs/PoseStamped` | `onTrackerLeft/Right/Body` → smooth + 20-deep deque |
 | `/teleop/pedal` | `sensor_msgs/Joy` | `onPedal` → 3개 페달 edge detection |
-| `/rby1/state/joint` | `sensor_msgs/JointState` | `onJointState` → `ik_solver_->updateFromJointState` (FK용 q 갱신) |
+| `/rby1/state/pose` | `tf2_msgs/TFMessage` | `onStatePose` → child_frame_id별 `last_ee_r_`/`last_ee_l_`/`last_torso_` 캐시 (FK 기준) |
 | `/teleop/task_id` | `std_msgs/Int32` | task_id 갱신 |
 | `/teleop/mirror_mode` | `std_msgs/String` | `"mirror"`/`"normal"` 토글 |
 
-> warmup/cooldown hold는 로컬 SDK FK(`publishEeHold`)로 계산하므로 `/rby1/state/ee_pose` 구독은 제거됨(2026-06-02).
+> warmup/cooldown hold는 캐시한 `/rby1/state/pose`의 ee_right/ee_left로 계산(`publishEeHold`).
 
 #### 발행 토픽
 
@@ -210,17 +203,17 @@ Eigen::Matrix3d dR_l_robot = v2r_R_ * dR_l * v2r_R_.transpose();
 ### 4.6 engage() 캡처 시점
 
 페달 A press → `engage()`:
-1. 트래커 smoothed 확인 (raw + smooth 모두 필요) + FK 모델 연결 확인 (`ik_solver_->connected()`)
+1. 트래커 smoothed 확인 (raw + smooth 모두 필요) + EE pose 수신 확인 (`last_ee_l_`/`last_ee_r_`)
 2. `ref_l_` / `ref_r_` ← 현재 트래커 pose (이후 delta 기준점)
-3. `ee_l_0_`/`ee_r_0_`, `sdk_ee_l_0_`/`sdk_ee_r_0_` ← SDK FK로 `ee_left/right` 프레임 캡처. **모델이 hw-core와 동일하므로 Z 오프셋 보정 없음**(과거 핵 제거).
-4. (`use_torso_` + body tracker 있을 때) `ref_body_`/`torso5_0_` 캡처
+3. `ee_l_0_`/`ee_r_0_`, `sdk_ee_l_0_`/`sdk_ee_r_0_` ← `/rby1/state/pose`의 `last_ee_l_`/`last_ee_r_`. **소스가 hw-core FK와 동일하므로 Z 오프셋 보정 없음**(과거 핵 제거).
+4. (`use_torso_` + body tracker + `last_torso_` 있을 때) `ref_body_`/`torso5_0_`(=`last_torso_`) 캡처
 5. `engaged_=true`, READY/PAUSED 상태면 togglepause 자동 호출
 
 ### 4.7 onTimer() 메인 루프 (100Hz)
 
 ```cpp
 1. /teleop/tracker_status publish (L:/R: + 옵션 B:)
-2. warmup_ticks_ > 0이면: publishEeHold() (로컬 FK로 현재 ee pose hold) 후 return (스트림 시작 직후 점프 방지)
+2. warmup_ticks_ > 0이면: publishEeHold() (`/rby1/state/pose`의 ee pose로 hold) 후 return (스트림 시작 직후 점프 방지)
 3. cooldown_ticks_ > 0이면: publishEeHold() 후 return (disengage 직후 잔여 모션 정지)
 4. 트래커 미준비면 return
 5. engaged_/ref_*/ee_*_0_ 모두 OK 확인 → 미만족 시 return
@@ -265,11 +258,10 @@ Eigen::Matrix3d dR_l_robot = v2r_R_ * dR_l * v2r_R_.transpose();
 | 함수 | 위치 | 역할 |
 |---|---|---|
 | `poseStampedToSe3` / `se3ToPose` / `poseToTransform` / `makeTransformStamped` / `se3ToTransformStamped` | 익명 ns | ROS msg ↔ 로컬 `SE3` 변환 헬퍼 |
-| `SdkFkSolver::connect` | 익명 ns | `Robot::Create`+`Connect`+`GetDynamics`로 모델 빌드 (재시도 가능) |
-| `SdkFkSolver::updateFromJointState` | 익명 ns | `/rby1/state/joint` 콜백 → 전체 DOF q 갱신 (이름 매핑) |
-| `SdkFkSolver::framePlacement` | 익명 ns | 명명된 frame(ee_right/ee_left/link_torso_5)의 `SE3` 반환 (FK); 미연결 시 nullopt |
-| `publishEeHold` | C++ 노드 | 현재 ee FK pose를 hold 명령으로 publish (warmup/cooldown) |
-| `ViveRby1Node` 생성자 | — | 파라미터 선언/읽기, FK 연결 스레드, 토픽·서비스 와이어링, 타이머 시작 |
+| `transformToSe3` | 익명 ns | `geometry_msgs/Transform` → 로컬 `SE3` |
+| `onStatePose` | C++ 노드 | `/rby1/state/pose` 콜백 → child_frame_id별 `last_ee_*`/`last_torso_` 캐시 |
+| `publishEeHold` | C++ 노드 | 캐시한 ee pose를 hold 명령으로 publish (warmup/cooldown) |
+| `ViveRby1Node` 생성자 | — | 파라미터 선언/읽기, 토픽·서비스 와이어링, 타이머 시작 |
 | `onTrackerLeft/Right/Body` | `:415-449` | 트래커 raw 저장 + deque 갱신 + smoothing |
 | `onPedal` | `:497-526` | 3 페달 edge detection |
 | `engage` / `disengage` | `:528-568` | 클러치 토글. ref/ee_0 캡처. 자동 togglepause. |
@@ -321,13 +313,13 @@ C++ 프로덕션 노드는 SDK Cartesian/Impedance 전용. 다른 모드가 필�
 - **engage 시점에 body tracker 미수신**: 늦은 재캡처(2026-05-22)가 작동하므로 그냥 기다리면 됨.
 - **mirror_mode 토글 후 큰 점프**: `mirror_mode_` 변경 시 `engage()`처럼 ref/ee_0 재캡처 — 이미 코드에서 처리.
 - **녹화 RECORDING에서 EndRecording 호출**: 거부됨. PAUSED로 먼저 (페달 A로 disengage).
-- **engage가 안 됨 / 점프**: FK 모델이 `GetDynamics()`로 로딩되기 전(`robot_address` 미도달)에는 engage가 `SDK dynamics model not ready yet`로 보류된다. 또 `robot_address`가 hw-core가 연결한 로봇과 다르면 FK 불일치로 engage 시 점프할 수 있다 — 동일 로봇을 가리켜야 한다.
+- **engage가 안 됨**: `/rby1/state/pose`를 아직 수신하지 못하면 engage가 `EE pose ... not received yet`로 보류된다. hw-core(rby1_core_node)가 떠서 FK를 발행 중인지, 외부 PC↔로봇 간 ROS2(DDS) 링크가 정상인지 확인.
 
 ---
 
 ## 9. 연관 패키지
 
-- `rby1-sdk` — FK용 dynamics 모델 (`GetDynamics()`); hw-core와 동일 모델
+- `rby1_core` (hw-core) — `/rby1/state/pose`(FK) 발행자 + 라이프사이클/명령 서비스
 - `vive_ros2` (input) — `/teleop/tracker/{left,right,body}` 발행
 - `pedal_ros2` (input) — `/teleop/pedal` 발행
 - `manus_ros2` (input) — Manus glove (별도; `manus_inspire`가 처리)

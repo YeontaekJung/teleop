@@ -6,8 +6,9 @@
 //   4) doTeleopStart/Stop (detached thread): SetControlMode → MoveToJointPosition → SetNullspaceJointRef → SetStream
 //   5) 3개 페달(A=clutch, B=discard, C=episode toggle) + scm_recording core 서비스 호출
 //   6) (옵션) body tracker → link_torso_5 (use_torso_, 2026-05-22 추가; runtime toggle)
-// FK는 rby1-sdk GetDynamics() 온보드 모델(hw-core와 동일)에서 옴 — pinocchio/로컬 URDF 불필요,
-// engage 기준이 hw-core FK와 일치(Z 오프셋 보정 제거). 관련 robot_address/robot_model 파라미터.
+// EE/torso FK 기준은 hw-core가 발행하는 /rby1/state/pose (tf2_msgs/TFMessage,
+// child_frame_id ee_right/ee_left/link_torso_5)를 ROS2로 구독해 얻는다 — 외부 PC에서도
+// 동작(로봇 gRPC 불필요), 소스가 hw-core FK로 통일되어 Z 오프셋 보정 불필요.
 // 패키지 가이드: DEVELOPER.ko.md
 #include <algorithm>
 #include <array>
@@ -33,14 +34,10 @@
 #include "Eigen/Geometry"
 
 #include "geometry_msgs/msg/pose.hpp"
-#include "geometry_msgs/msg/pose_array.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/transform_stamped.hpp"
 #include "tf2_msgs/msg/tf_message.hpp"
 #include "rby1_core_msgs/srv/set_control_mode.hpp"
-#include "rby1-sdk/model.h"
-#include "rby1-sdk/robot.h"
-#include "rby1-sdk/dynamics/robot.h"
 #include "rclcpp/rclcpp.hpp"
 #include "rby1_core_msgs/srv/move_to_joint_position.hpp"
 #include "rby1_core_msgs/srv/set_nullspace_joint_ref.hpp"
@@ -59,14 +56,10 @@
 namespace {
 
 using namespace std::chrono_literals;
-namespace ym = rb::y1_model;
-namespace dyn = rb::dyn;
-using rb::Robot;
 
-// Lightweight rigid transform — drop-in for the subset of SE3 this node
-// ever used (construction from (R,t) plus .rotation()/.translation() accessors).
-// Forward kinematics now comes from the rby1-sdk dynamics model, so pinocchio (and
-// the local robot_description URDF copy) are no longer needed.
+// Lightweight rigid transform — drop-in for the subset of SE3 this node ever used
+// (construction from (R,t) plus .rotation()/.translation() accessors). FK references
+// come from hw-core's /rby1/state/pose over ROS2, so no SDK/pinocchio/URDF is needed.
 struct SE3 {
   Eigen::Matrix3d R{Eigen::Matrix3d::Identity()};
   Eigen::Vector3d t{Eigen::Vector3d::Zero()};
@@ -90,6 +83,14 @@ SE3 poseStampedToSe3(const geometry_msgs::msg::PoseStamped & msg) {
   Eigen::Quaterniond quat(q.w, q.x, q.y, q.z);
   quat.normalize();
   return SE3(quat.toRotationMatrix(), Eigen::Vector3d(p.x, p.y, p.z));
+}
+
+SE3 transformToSe3(const geometry_msgs::msg::Transform & tf) {
+  const auto & t = tf.translation;
+  const auto & r = tf.rotation;
+  Eigen::Quaterniond quat(r.w, r.x, r.y, r.z);
+  quat.normalize();
+  return SE3(quat.toRotationMatrix(), Eigen::Vector3d(t.x, t.y, t.z));
 }
 
 geometry_msgs::msg::Pose se3ToPose(const SE3 & se3) {
@@ -138,124 +139,6 @@ bool isFinite(const SE3 & se3) {
   return se3.translation().allFinite() && se3.rotation().allFinite();
 }
 
-// SdkFkSolver — forward-kinematics provider backed by the rby1-sdk dynamics model
-// obtained from the robot via Robot::GetDynamics() (the SAME onboard model hw-core
-// uses for its IK/FK). Using the identical model makes teleop's engage-time EE
-// reference consistent with hw-core, so the old hand-tuned Z-offset corrections are
-// no longer needed. Only kinematic FK of ee_right / ee_left / link_torso_5 is needed
-// — no hand/payload info is required (the hand is distal to the ee_* frames and does
-// not move them). The connection only fetches the static model; no power/servo needed.
-//
-// FK link indices follow the MakeState link list below:
-//   0 = base, 1 = ee_right, 2 = ee_left, 3 = link_torso_5
-class SdkFkSolver {
- public:
-  // Connect to the robot and build the dynamics state. Returns false (and records
-  // last_error()) on any failure so the caller can retry. Thread-safe to call until
-  // it succeeds; framePlacement()/updateFromJointState() no-op until connected.
-  bool connect(const std::string & address, bool use_m) {
-    std::lock_guard<std::mutex> lk(mtx_);
-    try {
-      const std::vector<std::string> links{"base", "ee_right", "ee_left", "link_torso_5"};
-      use_m_ = use_m;
-      if (use_m) {
-        auto robot = Robot<ym::M>::Create(address);
-        if (!robot->Connect()) { last_error_ = "Connect() returned false"; return false; }
-        dyn_m_ = robot->GetDynamics();
-        std::vector<std::string> jn(ym::M::kRobotJointNames.begin(), ym::M::kRobotJointNames.end());
-        state_m_ = dyn_m_->MakeState(links, jn);
-        buildIndexMap(jn);
-        robot_m_ = robot;
-      } else {
-        auto robot = Robot<ym::A>::Create(address);
-        if (!robot->Connect()) { last_error_ = "Connect() returned false"; return false; }
-        dyn_a_ = robot->GetDynamics();
-        std::vector<std::string> jn(ym::A::kRobotJointNames.begin(), ym::A::kRobotJointNames.end());
-        state_a_ = dyn_a_->MakeState(links, jn);
-        buildIndexMap(jn);
-        robot_a_ = robot;
-      }
-      q_ = Eigen::VectorXd::Zero(static_cast<Eigen::Index>(idx_.size()));
-      connected_ = true;
-      return true;
-    } catch (const std::exception & e) {
-      last_error_ = e.what();
-      return false;
-    }
-  }
-
-  bool connected() const { return connected_; }
-  std::string last_error() {
-    std::lock_guard<std::mutex> lk(mtx_);
-    return last_error_;
-  }
-
-  // Fill the configuration vector by joint name. /rby1/state/joint carries only the
-  // 20 body joints; wheels/head stay at 0, which does not affect ee_*/torso FK.
-  void updateFromJointState(
-    const std::vector<std::string> & names, const std::vector<double> & positions) {
-    std::lock_guard<std::mutex> lk(mtx_);
-    if (!connected_) {
-      return;
-    }
-    for (size_t i = 0; i < names.size() && i < positions.size(); ++i) {
-      const auto it = idx_.find(names[i]);
-      if (it != idx_.end()) {
-        q_[it->second] = positions[i];
-      }
-    }
-  }
-
-  std::optional<SE3> framePlacement(const std::string & frame_name) {
-    std::lock_guard<std::mutex> lk(mtx_);
-    if (!connected_) {
-      return std::nullopt;
-    }
-    const int to = frameIdx(frame_name);
-    if (to < 0) {
-      return std::nullopt;
-    }
-    Eigen::Matrix4d T;
-    if (use_m_) {
-      state_m_->SetQ(q_);
-      dyn_m_->ComputeForwardKinematics(state_m_);
-      T = dyn_m_->ComputeTransformation(state_m_, 0, static_cast<unsigned int>(to));
-    } else {
-      state_a_->SetQ(q_);
-      dyn_a_->ComputeForwardKinematics(state_a_);
-      T = dyn_a_->ComputeTransformation(state_a_, 0, static_cast<unsigned int>(to));
-    }
-    return SE3(Eigen::Matrix3d(T.block<3, 3>(0, 0)), Eigen::Vector3d(T.block<3, 1>(0, 3)));
-  }
-
- private:
-  static int frameIdx(const std::string & frame_name) {
-    if (frame_name == "ee_right") return 1;
-    if (frame_name == "ee_left") return 2;
-    if (frame_name == "link_torso_5") return 3;
-    return -1;
-  }
-  void buildIndexMap(const std::vector<std::string> & joint_names) {
-    idx_.clear();
-    for (size_t i = 0; i < joint_names.size(); ++i) {
-      idx_[joint_names[i]] = static_cast<int>(i);
-    }
-  }
-
-  bool use_m_{false};
-  bool connected_{false};
-  std::string last_error_;
-  Eigen::VectorXd q_;
-  std::unordered_map<std::string, int> idx_;
-  std::shared_ptr<Robot<ym::A>> robot_a_;
-  std::shared_ptr<Robot<ym::M>> robot_m_;
-  std::shared_ptr<dyn::Robot<ym::A::kRobotDOF>> dyn_a_;
-  std::shared_ptr<dyn::Robot<ym::M::kRobotDOF>> dyn_m_;
-  std::shared_ptr<dyn::State<ym::A::kRobotDOF>> state_a_;
-  std::shared_ptr<dyn::State<ym::M::kRobotDOF>> state_m_;
-  std::mutex mtx_;
-};
-
 class ViveRby1Node : public rclcpp::Node {
  public:
   using StartRecording = scm_recording_msgs::srv::StartRecording;
@@ -270,15 +153,11 @@ class ViveRby1Node : public rclcpp::Node {
   ViveRby1Node()
   : Node("vive_rby1_node"),
     v2r_R_((Eigen::Matrix3d() << 0., 1., 0., -1., 0., 0., 0., 0., 1.).finished()) {
-    // robot_address / robot_model select the rby1-sdk dynamics model fetched via
-    // GetDynamics(). Must match the robot hw-core connects to so FK stays consistent.
-    declare_parameter("robot_address", "localhost:50051");
-    declare_parameter("robot_model", "a");  // "a" (2-wheel) | "m" (mecanum)
+    declare_parameter("topic_state_pose", "/rby1/state/pose");
     declare_parameter("topic_tracker_left",  "/teleop/tracker/left");
     declare_parameter("topic_tracker_right", "/teleop/tracker/right");
     declare_parameter("topic_tracker_body",  "/teleop/tracker/body");
     declare_parameter("topic_pedal", "/teleop/pedal");
-    declare_parameter("topic_joint_state", "/rby1/state/joint");
     declare_parameter("pos_scale", 1.0);
     declare_parameter("torso_pos_scale", 1.0);
     declare_parameter("use_torso", false);
@@ -291,14 +170,11 @@ class ViveRby1Node : public rclcpp::Node {
     declare_parameter("tracker_smooth_alpha", 0.9);
     declare_parameter("cooldown_sec", 0.5);
 
-    const auto robot_address = get_parameter("robot_address").as_string();
-    const auto robot_model = get_parameter("robot_model").as_string();
-    const bool use_m = (robot_model == "m" || robot_model == "M");
+    const auto topic_state_pose = get_parameter("topic_state_pose").as_string();
     const auto topic_l = get_parameter("topic_tracker_left").as_string();
     const auto topic_r = get_parameter("topic_tracker_right").as_string();
     const auto topic_b = get_parameter("topic_tracker_body").as_string();
     const auto topic_p = get_parameter("topic_pedal").as_string();
-    const auto topic_js = get_parameter("topic_joint_state").as_string();
 
     pos_scale_ = get_parameter("pos_scale").as_double();
     torso_pos_scale_ = get_parameter("torso_pos_scale").as_double();
@@ -312,26 +188,12 @@ class ViveRby1Node : public rclcpp::Node {
     tracker_smooth_alpha_ = get_parameter("tracker_smooth_alpha").as_double();
     cooldown_sec_ = get_parameter("cooldown_sec").as_double();
 
-    // Fetch the SDK dynamics model in the background: the robot (and rby1_core_node)
-    // may not be up yet when this node starts, so retry until GetDynamics() succeeds.
-    // FK (engage references, warmup/cooldown hold) simply no-ops until connected.
-    ik_solver_ = std::make_unique<SdkFkSolver>();
-    connect_thread_ = std::thread([this, robot_address, use_m]() {
-      while (rclcpp::ok() && !ik_solver_->connected()) {
-        if (ik_solver_->connect(robot_address, use_m)) {
-          RCLCPP_INFO(
-            get_logger(), "[vive_rby1] SDK dynamics ready (%s, model %s)",
-            robot_address.c_str(), use_m ? "M" : "A");
-          break;
-        }
-        RCLCPP_WARN(
-          get_logger(), "[vive_rby1] SDK dynamics connect failed (%s) — retrying in 2s",
-          ik_solver_->last_error().c_str());
-        std::this_thread::sleep_for(std::chrono::seconds(2));
-      }
-    });
-
     auto stream_qos = rclcpp::QoS(rclcpp::KeepLast(1)).best_effort();
+    // EE/torso FK references come from hw-core over ROS2 (/rby1/state/pose, TFMessage
+    // keyed by child_frame_id). No SDK/gRPC/URDF — works from an external PC.
+    sub_state_pose_ = create_subscription<tf2_msgs::msg::TFMessage>(
+      topic_state_pose, stream_qos,
+      std::bind(&ViveRby1Node::onStatePose, this, std::placeholders::_1));
     sub_tracker_l_ = create_subscription<geometry_msgs::msg::PoseStamped>(
       topic_l, stream_qos, std::bind(&ViveRby1Node::onTrackerLeft, this, std::placeholders::_1));
     sub_tracker_r_ = create_subscription<geometry_msgs::msg::PoseStamped>(
@@ -341,8 +203,6 @@ class ViveRby1Node : public rclcpp::Node {
     sub_pedal_ = create_subscription<sensor_msgs::msg::Joy>(
       topic_p, rclcpp::QoS(rclcpp::KeepLast(5)).reliable(),
       std::bind(&ViveRby1Node::onPedal, this, std::placeholders::_1));
-    sub_joint_state_ = create_subscription<sensor_msgs::msg::JointState>(
-      topic_js, stream_qos, std::bind(&ViveRby1Node::onJointState, this, std::placeholders::_1));
     sub_task_id_ = create_subscription<std_msgs::msg::Int32>(
       "/teleop/task_id", 10, [this](const std_msgs::msg::Int32::SharedPtr msg) {
         rec_task_id_ = msg->data;
@@ -357,8 +217,7 @@ class ViveRby1Node : public rclcpp::Node {
     // broadcast). Each TransformStamped names a target link via child_frame_id:
     // "ee_right", "ee_left", and optionally "link_torso_5".
     pub_pose_cmd_ = create_publisher<tf2_msgs::msg::TFMessage>("/rby1/cmd/pose", stream_qos);
-    // warmup/cooldown hold is computed from the local SDK FK model (see publishEeHold);
-    // no /rby1/state/ee_pose subscription is needed.
+    // warmup/cooldown hold is computed from the latest /rby1/state/pose (publishEeHold).
     pub_rec_state_ = create_publisher<std_msgs::msg::String>("/teleop/rec_state", 10);
     pub_rec_episode_ = create_publisher<std_msgs::msg::Int32>("/teleop/rec_episode", 10);
     pub_tracker_status_ = create_publisher<std_msgs::msg::String>("/teleop/tracker_status", 10);
@@ -409,15 +268,17 @@ class ViveRby1Node : public rclcpp::Node {
     RCLCPP_INFO(get_logger(), "[vive_rby1] Ready -- press pedal 0 to engage");
   }
 
-  ~ViveRby1Node() override {
-    // The background connect thread checks rclcpp::ok(); join before the std::thread
-    // member is destroyed so it never std::terminate()s on a joinable thread.
-    if (connect_thread_.joinable()) {
-      connect_thread_.join();
+ private:
+  // /rby1/state/pose (tf2_msgs/TFMessage) — hw-core FK, keyed by child_frame_id.
+  // Cache the latest ee_right/ee_left/link_torso_5 for engage refs and hold publishing.
+  void onStatePose(const tf2_msgs::msg::TFMessage::SharedPtr msg) {
+    for (const auto & ts : msg->transforms) {
+      if      (ts.child_frame_id == "ee_right")     last_ee_r_ = transformToSe3(ts.transform);
+      else if (ts.child_frame_id == "ee_left")      last_ee_l_ = transformToSe3(ts.transform);
+      else if (ts.child_frame_id == "link_torso_5") last_torso_ = transformToSe3(ts.transform);
     }
   }
 
- private:
   struct TrackerState {
     geometry_msgs::msg::PoseStamped::SharedPtr raw;
     std::optional<SE3> smoothed;
@@ -455,15 +316,10 @@ class ViveRby1Node : public rclcpp::Node {
     tracker_b_.smoothed = smoothTracker(tracker_b_.smoothed, *msg);
     // Body tracker came online after engage: capture reference now so torso
     // joins smoothly instead of staying disabled until the next re-engage.
-    if (engaged_ && use_torso_ && !ref_body_ && tracker_b_.smoothed) {
+    if (engaged_ && use_torso_ && !ref_body_ && tracker_b_.smoothed && last_torso_) {
       ref_body_ = tracker_b_.smoothed;
-      torso5_0_ = ik_solver_->framePlacement("link_torso_5");
+      torso5_0_ = last_torso_;
     }
-  }
-
-  void onJointState(const sensor_msgs::msg::JointState::SharedPtr msg) {
-    joint_state_ = msg;
-    ik_solver_->updateFromJointState(msg->name, msg->position);
   }
 
   void onMirrorMode(const std_msgs::msg::String::SharedPtr msg) {
@@ -472,8 +328,8 @@ class ViveRby1Node : public rclcpp::Node {
     if (engaged_) {
       ref_l_ = tracker_l_.smoothed;
       ref_r_ = tracker_r_.smoothed;
-      ee_l_0_ = ik_solver_->framePlacement("ee_left");
-      ee_r_0_ = ik_solver_->framePlacement("ee_right");
+      ee_l_0_ = last_ee_l_;
+      ee_r_0_ = last_ee_r_;
     }
   }
 
@@ -496,10 +352,10 @@ class ViveRby1Node : public rclcpp::Node {
       // Stop sending link_torso_5: hw-core holds the torso at its last pose.
       ref_body_.reset();
       torso5_0_.reset();
-    } else if (engaged_ && tracker_b_.smoothed) {
+    } else if (engaged_ && tracker_b_.smoothed && last_torso_) {
       // Re-enabled mid-stream: recapture reference from the current torso pose.
       ref_body_ = tracker_b_.smoothed;
-      torso5_0_ = ik_solver_->framePlacement("link_torso_5");
+      torso5_0_ = last_torso_;
     }
     res->success = true;
     res->message = use_torso_ ? "enabled" : "disabled";
@@ -544,26 +400,26 @@ class ViveRby1Node : public rclcpp::Node {
 
   // engage — 페달 A 또는 GUI 클러치 토글 시 호출.
   // 트래커 기준점(ref_*)과 로봇 EE 기준점(ee_*_0_/sdk_ee_*_0_)을 캡처해 이후 delta 계산의 origin으로 사용.
-  // FK는 hw-core와 동일한 SDK GetDynamics() 모델에서 오므로 EE 기준이 일치 — 과거의 Z 오프셋 보정 불필요.
+  // EE 기준은 hw-core가 발행한 /rby1/state/pose(FK)에서 옴 — 소스가 hw-core와 동일해 Z 오프셋 보정 불필요.
   // engage 시점에 body tracker가 미가용이면 onTrackerBody에서 늦은 재캡처(2026-05-22)됨.
   void engage() {
     if (!tracker_l_.smoothed || !tracker_r_.smoothed) {
       RCLCPP_WARN(get_logger(), "Trackers not ready -- ignoring engage");
       return;
     }
-    if (!ik_solver_->connected()) {
-      RCLCPP_WARN(get_logger(), "Cannot engage -- SDK dynamics model not ready yet");
+    if (!last_ee_l_ || !last_ee_r_) {
+      RCLCPP_WARN(get_logger(), "Cannot engage -- EE pose (/rby1/state/pose) not received yet");
       return;
     }
     ref_l_ = tracker_l_.smoothed;
     ref_r_ = tracker_r_.smoothed;
-    ee_l_0_ = ik_solver_->framePlacement("ee_left");
-    ee_r_0_ = ik_solver_->framePlacement("ee_right");
-    sdk_ee_l_0_ = ik_solver_->framePlacement("ee_left");
-    sdk_ee_r_0_ = ik_solver_->framePlacement("ee_right");
-    if (use_torso_ && tracker_b_.smoothed) {
+    ee_l_0_ = last_ee_l_;
+    ee_r_0_ = last_ee_r_;
+    sdk_ee_l_0_ = last_ee_l_;
+    sdk_ee_r_0_ = last_ee_r_;
+    if (use_torso_ && tracker_b_.smoothed && last_torso_) {
       ref_body_   = tracker_b_.smoothed;
-      torso5_0_   = ik_solver_->framePlacement("link_torso_5");
+      torso5_0_   = last_torso_;
     }
     sdk_prev_l_.reset();
     sdk_prev_r_.reset();
@@ -941,19 +797,17 @@ class ViveRby1Node : public rclcpp::Node {
     return "OK";
   }
 
-  // Publish the current EE FK pose as a hold command so hw-core snaps its cached
-  // target to the real EE position (stops residual motion at warmup/cooldown).
-  // Computed from the local SDK FK model — replaces the old /rby1/state/ee_pose feed.
+  // Publish the latest EE FK pose (from /rby1/state/pose) as a hold command so hw-core
+  // snaps its cached target to the real EE position (stops residual motion at
+  // warmup/cooldown).
   void publishEeHold(const rclcpp::Time & stamp) {
-    const auto ee_r = ik_solver_->framePlacement("ee_right");
-    const auto ee_l = ik_solver_->framePlacement("ee_left");
-    if (!ee_r || !ee_l) {
+    if (!last_ee_r_ || !last_ee_l_) {
       return;
     }
     tf2_msgs::msg::TFMessage hold;
     hold.transforms.reserve(2);
-    hold.transforms.push_back(se3ToTransformStamped("ee_right", *ee_r, stamp));
-    hold.transforms.push_back(se3ToTransformStamped("ee_left",  *ee_l, stamp));
+    hold.transforms.push_back(se3ToTransformStamped("ee_right", *last_ee_r_, stamp));
+    hold.transforms.push_back(se3ToTransformStamped("ee_left",  *last_ee_l_, stamp));
     pub_pose_cmd_->publish(hold);
   }
 
@@ -1061,14 +915,11 @@ class ViveRby1Node : public rclcpp::Node {
       const_cast<rclcpp::Clock &>(*get_clock()).now().nanoseconds()) * 1e-9;
   }
 
-  std::unique_ptr<SdkFkSolver> ik_solver_;
-  std::thread connect_thread_;
-
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr sub_tracker_l_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr sub_tracker_r_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr sub_tracker_b_;
   rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr sub_pedal_;
-  rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr sub_joint_state_;
+  rclcpp::Subscription<tf2_msgs::msg::TFMessage>::SharedPtr sub_state_pose_;
   rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr sub_task_id_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr sub_mirror_mode_;
   rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr srv_set_use_torso_;
@@ -1096,7 +947,10 @@ class ViveRby1Node : public rclcpp::Node {
   TrackerState tracker_l_;
   TrackerState tracker_r_;
   TrackerState tracker_b_;
-  sensor_msgs::msg::JointState::SharedPtr joint_state_;
+  // Latest hw-core FK from /rby1/state/pose (keyed by child_frame_id).
+  std::optional<SE3> last_ee_r_;
+  std::optional<SE3> last_ee_l_;
+  std::optional<SE3> last_torso_;
   std::optional<SE3> ref_l_;
   std::optional<SE3> ref_r_;
   std::optional<SE3> ee_l_0_;

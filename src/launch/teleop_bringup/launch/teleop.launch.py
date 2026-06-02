@@ -12,8 +12,6 @@ def generate_launch_description():
     use_manus = LaunchConfiguration('use_manus')
     use_pedal = LaunchConfiguration('use_pedal')
     use_vive  = LaunchConfiguration('use_vive')
-    robot_address = LaunchConfiguration('robot_address')
-    robot_model   = LaunchConfiguration('robot_model')
 
     not_sim   = NotSubstitution(sim)
     pedal_on  = AndSubstitution(use_pedal, not_sim)
@@ -26,16 +24,6 @@ def generate_launch_description():
     return LaunchDescription([
 
         # ── Launch arguments ───────────────────────────────────────────────
-        DeclareLaunchArgument(
-            'robot_address',
-            default_value='localhost:50051',
-            description='rby1-sdk gRPC address for vive_rby1_node FK model (GetDynamics)'),
-
-        DeclareLaunchArgument(
-            'robot_model',
-            default_value='a',
-            description='Robot model for FK: "a" (2-wheel) | "m" (mecanum)'),
-
         DeclareLaunchArgument(
             'sim',
             default_value='false',
@@ -109,8 +97,6 @@ def generate_launch_description():
             name='vive_rby1_node',
             output='screen',
             parameters=[{
-                'robot_address':      robot_address,
-                'robot_model':        robot_model,
                 'publish_rate':       100.0,
                 'pos_scale':          0.5,
                 'torso_pos_scale':    1.0,
