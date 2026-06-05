@@ -31,7 +31,7 @@ from std_srvs.srv import SetBool, Trigger
 
 from rby1_core_msgs.srv import (
     ConnectRobot, SetPower, SetServo, SetControlMode, SetStream, MoveToJointPosition,
-    SetCartesianJointLimits, SetNullspaceWeight, SetNullspaceJointRef,
+    SetCartesianJointLimits, SetNullspaceWeight, SetNullspaceJointRef, SetCommandSource,
 )
 from rcl_interfaces.srv import SetParameters
 from rcl_interfaces.msg import Parameter as RosParameter, ParameterValue, ParameterType
@@ -240,6 +240,7 @@ class ScmGuiNode(Node):
         self._cli_set_ci_limits = self.create_client(SetCartesianJointLimits, '/rby1/set_cartesian_joint_limits')
         self._cli_set_ns_weight = self.create_client(SetNullspaceWeight,       '/rby1/set_nullspace_weight')
         self._cli_set_ns_ref    = self.create_client(SetNullspaceJointRef,     '/rby1/set_nullspace_joint_ref')
+        self._cli_set_cmd_source = self.create_client(SetCommandSource,         '/rby1/set_command_source')
 
         # Service clients — vive_rby1
         self._cli_set_use_torso = self.create_client(SetBool,       '/vive_rby1/set_use_torso')
@@ -447,6 +448,11 @@ class ScmGuiNode(Node):
         req.source = source
         req.control = control
         self._call_async(self._cli_ctrl_mode, req, done_cb)
+
+    def call_set_command_source(self, source: str, done_cb=None):
+        req = SetCommandSource.Request()
+        req.source = source
+        self._call_async(self._cli_set_cmd_source, req, done_cb)
 
     def call_move_to_joint_position(self, positions: list, names: list,
                                      min_time: float = 5.0, done_cb=None):
@@ -1408,10 +1414,29 @@ class TeleopGuiWindow(QWidget):
         stream_row.addWidget(self._btn_stream_off)
         stream_row.addStretch()
 
+        # ── Command source: which node rby1_core accepts /rby1/cmd/* from ──
+        # Free-text (not a dropdown): sources beyond teleop/vla will exist.
+        # The label shows the source rby1_core is CURRENTLY accepting (from the
+        # status JSON), independent of what is typed in the box.
+        self._lbl_cmd_source = _make_status_label('Source')
+        self._le_cmd_source = QLineEdit()
+        self._le_cmd_source.setPlaceholderText('e.g. teleop / vla')
+        self._le_cmd_source.returnPressed.connect(self._on_apply_cmd_source)
+        self._btn_cmd_source = _make_btn('Apply', '#1976D2', height=30)
+        self._btn_cmd_source.setFixedWidth(60)
+        self._btn_cmd_source.clicked.connect(self._on_apply_cmd_source)
+
+        cmd_src_row = QHBoxLayout()
+        cmd_src_row.setSpacing(6)
+        cmd_src_row.addWidget(self._lbl_cmd_source)
+        cmd_src_row.addWidget(self._le_cmd_source)
+        cmd_src_row.addWidget(self._btn_cmd_source)
+
         vbox.addWidget(self._lbl_ctr_type)
         vbox.addLayout(src_row)
         vbox.addLayout(ctrl_row)
         vbox.addLayout(stream_row)
+        vbox.addLayout(cmd_src_row)
 
         group.setLayout(vbox)
         return group
@@ -1890,6 +1915,7 @@ class TeleopGuiWindow(QWidget):
         gripper = bool(data.get('has_gripper',       False))
         ctrl    = data.get('control_state', '')
         ctr_type = data.get('ctr_type', '')
+        cmd_source = data.get('cmd_source', '')
 
         def _set(lbl, text, color):
             lbl.setText(f'  {text}  ')
@@ -1901,6 +1927,9 @@ class TeleopGuiWindow(QWidget):
         _set(self._lbl_stream,   'Stream On'  if stream  else 'Stream Off', _C_ON if stream  else _C_OFF_RED)
         _set(self._lbl_gripper,  'Gripper ✓'  if gripper else 'Gripper ✗',  _C_ON if gripper else _C_OFF)
         _set(self._lbl_ctr_type, ctr_type or '—', _C_ON if stream else _C_OFF)
+        # Live "currently accepted" command source (empty = rejecting all).
+        _set(self._lbl_cmd_source, cmd_source or '— (none)',
+             _C_ON if cmd_source else _C_OFF_RED)
 
         if stream != self._stream_on:
             self._stream_on = stream
@@ -1997,6 +2026,16 @@ class TeleopGuiWindow(QWidget):
         src  = 'joint'     if self._bg_src.checkedId()  == 0 else 'cartesian'
         ctrl = 'position'  if self._bg_ctrl.checkedId() == 0 else 'impedance'
         self._node.call_ctrl_mode(src, ctrl)
+
+    def _on_apply_cmd_source(self):
+        # Set the publisher identity rby1_core will accept on /rby1/cmd/*.
+        # Empty string is allowed and means "reject all".
+        source = self._le_cmd_source.text().strip()
+        self._btn_cmd_source.setEnabled(False)
+        self._node.call_set_command_source(
+            source,
+            done_cb=lambda ok, _: self._sig.dispatch.emit(
+                lambda: self._btn_cmd_source.setEnabled(True)))
 
     def _on_mirror_mode_changed(self, btn_id: int):
         self._node.pub_mirror_mode(btn_id == 1)

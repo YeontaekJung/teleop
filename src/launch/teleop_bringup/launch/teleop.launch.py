@@ -103,6 +103,10 @@ def generate_launch_description():
                 'use_torso':          False,
                 'sdk_max_delta_pos':  0.03,
                 'cooldown_sec':       0.5,
+                # Stamped into /rby1/cmd/pose frame_id + claimed on rby1_core at
+                # startup, so launching this bringup makes "teleop" the active
+                # command source. Override (e.g. command_source:=vla) if needed.
+                'command_source':     'teleop',
             }],
         ),
 

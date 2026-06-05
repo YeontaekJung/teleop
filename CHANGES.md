@@ -1,5 +1,19 @@
 # CHANGES
 
+## 2026-06-04
+
+### 명령 소스 태깅/claim + GUI Control Mode Manager 소스 입력 (hw-core 소스 필터링 대응)
+
+- **배경:** hw-core rby1_core가 `/rby1/cmd/{joint,pose}`를 `header.frame_id`(소스 태그)로 필터링하고 `/rby1/set_command_source`로 허용 소스를 교체하게 바뀌었다(hw-core 레포 참조, 기본값 `""`=전부 거부). teleop 측은 (1) cmd에 자기 소스를 스탬프하고, (2) 기동 시 그 소스를 claim해 기존 워크플로를 유지하며, (3) GUI에서 임의 소스를 지정할 수 있어야 한다.
+- **변경 (`src/core/vive_rby1/src/vive_rby1_node.cpp`):**
+  - 파라미터 `command_source`(기본 `"teleop"`) 추가. `makeTransformStamped`/`se3ToTransformStamped`에 `source` 인자를 추가해 `/rby1/cmd/pose`의 모든 `TransformStamped`(ee_right/ee_left/link_torso_5 및 warmup/cooldown hold) `header.frame_id`에 스탬프(기존 `"base"` 대체).
+  - 기동 시 `/rby1/set_command_source`로 `command_source`를 **claim**: 서비스가 뜰 때까지 1초 간격으로 재시도하는 타이머(`cmd_source_claim_timer_`/`tryClaimCommandSource`) → 성공 시 1회 전송 후 타이머 취소. 외부 PC에서 rby1_core가 나중에 떠도 안전. 따라서 teleop_bringup 실행만으로 `"teleop"`이 활성 소스가 됨.
+  - 클라이언트 `cli_cmd_source_`(`SetCommandSource`) 추가.
+- **launch (`teleop_bringup/launch/teleop.launch.py`):** `vive_rby1_node`에 `command_source: 'teleop'` 추가(`command_source:=vla` 등으로 override 가능).
+- **GUI (`src/gui/scm_gui/scm_gui/scm_gui_node.py`):** Control Mode Manager에 "Source" 행 추가 — **자유 입력 `QLineEdit`(드롭다운 아님; teleop/vla 외 소스 대비) + Apply 버튼** → `/rby1/set_command_source` 호출(빈 문자열 허용=전부 거부). 상태 JSON `cmd_source`를 읽어 **현재 rby1_core가 받아들이는 소스**를 라벨에 표시(비어있으면 빨강 `— (none)`). 클라이언트/`call_set_command_source` 헬퍼 추가.
+- **msgs:** `src/msgs/rby1_core_msgs/srv/SetCommandSource.srv` 추가(+CMakeLists 등록) — hw-core 사본과 동기화(inspire_hand_msgs와 동일 규칙).
+- **검증:** Docker `colcon build` → teleop_bringup 실행 시 rby1_core 상태 `cmd_source=teleop` 확인, 평소대로 engage 동작. GUI에서 `vla` 입력+Apply 시 라벨 갱신 및 teleop cmd 거부, `teleop` 재입력 시 복구.
+
 ## 2026-06-02
 
 ### vive_rby1: EE/torso FK 기준을 ROS2 `/rby1/state/pose`로 통일 + 외부 IK 자산 제거

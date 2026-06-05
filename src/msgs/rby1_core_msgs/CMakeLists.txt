@@ -22,6 +22,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/SetCartesianJointLimits.srv"
   "srv/SetNullspaceWeight.srv"
   "srv/SetStream.srv"
+  "srv/SetCommandSource.srv"
   DEPENDENCIES std_msgs builtin_interfaces geometry_msgs sensor_msgs
 )
 

@@ -42,6 +42,7 @@
 #include "rby1_core_msgs/srv/move_to_joint_position.hpp"
 #include "rby1_core_msgs/srv/set_nullspace_joint_ref.hpp"
 #include "rby1_core_msgs/srv/set_stream.hpp"
+#include "rby1_core_msgs/srv/set_command_source.hpp"
 #include "scm_recording_msgs/srv/end_recording.hpp"
 #include "scm_recording_msgs/srv/set_tele_op_pose.hpp"
 #include "scm_recording_msgs/srv/start_recording.hpp"
@@ -116,13 +117,17 @@ geometry_msgs::msg::Transform poseToTransform(const geometry_msgs::msg::Pose & p
   return t;
 }
 
+// header.frame_id carries the publisher identity (the "command source") that
+// rby1_core matches against its allowed source — NOT a TF parent frame. The
+// former cosmetic "base" is unused on the /rby1/cmd/pose path.
 geometry_msgs::msg::TransformStamped makeTransformStamped(
     const std::string & child_frame_id,
     const geometry_msgs::msg::Transform & tf,
-    const rclcpp::Time & stamp) {
+    const rclcpp::Time & stamp,
+    const std::string & source) {
   geometry_msgs::msg::TransformStamped ts;
   ts.header.stamp    = stamp;
-  ts.header.frame_id = "base";
+  ts.header.frame_id = source;
   ts.child_frame_id  = child_frame_id;
   ts.transform       = tf;
   return ts;
@@ -131,8 +136,9 @@ geometry_msgs::msg::TransformStamped makeTransformStamped(
 geometry_msgs::msg::TransformStamped se3ToTransformStamped(
     const std::string & child_frame_id,
     const SE3 & se3,
-    const rclcpp::Time & stamp) {
-  return makeTransformStamped(child_frame_id, poseToTransform(se3ToPose(se3)), stamp);
+    const rclcpp::Time & stamp,
+    const std::string & source) {
+  return makeTransformStamped(child_frame_id, poseToTransform(se3ToPose(se3)), stamp, source);
 }
 
 bool isFinite(const SE3 & se3) {
@@ -149,6 +155,7 @@ class ViveRby1Node : public rclcpp::Node {
   using SetStream = rby1_core_msgs::srv::SetStream;
   using SetTeleOpPose = scm_recording_msgs::srv::SetTeleOpPose;
   using SetNullspaceJointRef = rby1_core_msgs::srv::SetNullspaceJointRef;
+  using SetCommandSource = rby1_core_msgs::srv::SetCommandSource;
 
   ViveRby1Node()
   : Node("vive_rby1_node"),
@@ -169,6 +176,9 @@ class ViveRby1Node : public rclcpp::Node {
     declare_parameter("pedal_episode_index", 2);
     declare_parameter("tracker_smooth_alpha", 0.9);
     declare_parameter("cooldown_sec", 0.5);
+    // Identity stamped into /rby1/cmd/pose header.frame_id; also claimed at
+    // startup via /rby1/set_command_source so rby1_core accepts our commands.
+    declare_parameter("command_source", "teleop");
 
     const auto topic_state_pose = get_parameter("topic_state_pose").as_string();
     const auto topic_l = get_parameter("topic_tracker_left").as_string();
@@ -187,6 +197,7 @@ class ViveRby1Node : public rclcpp::Node {
     pedal_episode_idx_ = static_cast<size_t>(get_parameter("pedal_episode_index").as_int());
     tracker_smooth_alpha_ = get_parameter("tracker_smooth_alpha").as_double();
     cooldown_sec_ = get_parameter("cooldown_sec").as_double();
+    command_source_ = get_parameter("command_source").as_string();
 
     auto stream_qos = rclcpp::QoS(rclcpp::KeepLast(1)).best_effort();
     // EE/torso FK references come from hw-core over ROS2 (/rby1/state/pose, TFMessage
@@ -230,6 +241,7 @@ class ViveRby1Node : public rclcpp::Node {
     cli_stream_ = create_client<SetStream>("/rby1/stream");
     cli_move_joint_ = create_client<MoveToJointPosition>("/rby1/move_to_joint_position");
     cli_nullspace_joint_ref_ = create_client<SetNullspaceJointRef>("/rby1/set_nullspace_joint_ref");
+    cli_cmd_source_ = create_client<SetCommandSource>("/rby1/set_command_source");
 
     srv_teleop_start_ = create_service<std_srvs::srv::Trigger>(
       "/vive_rby1/teleop_start",
@@ -265,10 +277,32 @@ class ViveRby1Node : public rclcpp::Node {
       std::chrono::duration<double>(1.0 / std::max(1.0, publish_rate_)),
       std::bind(&ViveRby1Node::onTimer, this));
 
+    // Claim the command source on rby1_core so it accepts our /rby1/cmd/pose.
+    // Retries every 1 s until the service is up (rby1_core may start after us,
+    // possibly on another machine), then sends once and stops the timer.
+    cmd_source_claim_timer_ = create_wall_timer(
+      std::chrono::seconds(1), std::bind(&ViveRby1Node::tryClaimCommandSource, this));
+
     RCLCPP_INFO(get_logger(), "[vive_rby1] Ready -- press pedal 0 to engage");
   }
 
  private:
+  // Push command_source_ to rby1_core's /rby1/set_command_source so it accepts
+  // commands tagged with our frame_id. Fired periodically until the service is
+  // available; sends once on success and cancels the timer. Fire-and-forget.
+  void tryClaimCommandSource() {
+    if (!cli_cmd_source_->service_is_ready()) return;
+    auto req = std::make_shared<SetCommandSource::Request>();
+    req->source = command_source_;
+    cli_cmd_source_->async_send_request(
+      req, [this](rclcpp::Client<SetCommandSource>::SharedFuture fut) {
+        const auto res = fut.get();
+        RCLCPP_INFO(get_logger(), "[vive_rby1] claimed command source '%s': %s",
+                    command_source_.c_str(), res->message.c_str());
+      });
+    cmd_source_claim_timer_->cancel();
+  }
+
   // /rby1/state/pose (tf2_msgs/TFMessage) — hw-core FK, keyed by child_frame_id.
   // Cache the latest ee_right/ee_left/link_torso_5 for engage refs and hold publishing.
   void onStatePose(const tf2_msgs::msg::TFMessage::SharedPtr msg) {
@@ -806,8 +840,8 @@ class ViveRby1Node : public rclcpp::Node {
     }
     tf2_msgs::msg::TFMessage hold;
     hold.transforms.reserve(2);
-    hold.transforms.push_back(se3ToTransformStamped("ee_right", *last_ee_r_, stamp));
-    hold.transforms.push_back(se3ToTransformStamped("ee_left",  *last_ee_l_, stamp));
+    hold.transforms.push_back(se3ToTransformStamped("ee_right", *last_ee_r_, stamp, command_source_));
+    hold.transforms.push_back(se3ToTransformStamped("ee_left",  *last_ee_l_, stamp, command_source_));
     pub_pose_cmd_->publish(hold);
   }
 
@@ -892,8 +926,8 @@ class ViveRby1Node : public rclcpp::Node {
     tf2_msgs::msg::TFMessage msg;
     const rclcpp::Time stamp = now();
     msg.transforms.reserve(3);
-    msg.transforms.push_back(se3ToTransformStamped("ee_right", *sdk_r, stamp));
-    msg.transforms.push_back(se3ToTransformStamped("ee_left",  *sdk_l, stamp));
+    msg.transforms.push_back(se3ToTransformStamped("ee_right", *sdk_r, stamp, command_source_));
+    msg.transforms.push_back(se3ToTransformStamped("ee_left",  *sdk_l, stamp, command_source_));
     if (use_torso_ && ref_body_ && torso5_0_ && tracker_b_.smoothed) {
       Eigen::Vector3d delta_b = v2r_R_ * (tracker_b_.smoothed->translation() - ref_body_->translation());
       const Eigen::Matrix3d dR_b = tracker_b_.smoothed->rotation() * ref_body_->rotation().transpose();
@@ -905,7 +939,7 @@ class ViveRby1Node : public rclcpp::Node {
       }
       const SE3 torso_target(dR_b_robot * torso5_0_->rotation(),
                                         torso5_0_->translation() + torso_pos_scale_ * delta_b);
-      msg.transforms.push_back(se3ToTransformStamped("link_torso_5", torso_target, stamp));
+      msg.transforms.push_back(se3ToTransformStamped("link_torso_5", torso_target, stamp, command_source_));
     }
     pub_pose_cmd_->publish(msg);
   }
@@ -937,12 +971,14 @@ class ViveRby1Node : public rclcpp::Node {
   rclcpp::Client<SetStream>::SharedPtr cli_stream_;
   rclcpp::Client<MoveToJointPosition>::SharedPtr cli_move_joint_;
   rclcpp::Client<SetNullspaceJointRef>::SharedPtr cli_nullspace_joint_ref_;
+  rclcpp::Client<SetCommandSource>::SharedPtr cli_cmd_source_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_teleop_start_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_teleop_stop_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_toggle_clutch_;
   rclcpp::Service<SetTeleOpPose>::SharedPtr srv_set_teleop_pose_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_toggle_episode_;
   rclcpp::TimerBase::SharedPtr timer_;
+  rclcpp::TimerBase::SharedPtr cmd_source_claim_timer_;  // retries claim until rby1_core is up
 
   TrackerState tracker_l_;
   TrackerState tracker_r_;
@@ -1000,6 +1036,7 @@ class ViveRby1Node : public rclcpp::Node {
   size_t pedal_engage_idx_{0};
   size_t pedal_discard_idx_{1};
   size_t pedal_episode_idx_{2};
+  std::string command_source_{"teleop"};  // stamped into /rby1/cmd/pose frame_id
 };
 
 }  // namespace

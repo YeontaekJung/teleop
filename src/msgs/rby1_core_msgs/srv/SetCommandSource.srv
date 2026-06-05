@@ -1,0 +1,9 @@
+# Allowed publisher identity for /rby1/cmd/joint and /rby1/cmd/pose.
+# rby1_core compares this against the incoming header.frame_id:
+#   frame_id == source -> command is used; otherwise it is dropped (throttled WARN).
+# A single value is shared by both topics (joint and pose are never used together).
+# Empty string rejects ALL command publishers.
+string source
+---
+bool success
+string message
